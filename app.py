@@ -973,11 +973,8 @@ try:
     from v2.plagiarism_engine import check_document as _plag_check
     from v2.web_checker import web_check as _web_check
     from v2.plagiarism_report import build_report as _build_plag_report
-    try:
-        from v2.config import GOOGLE_API_KEY as _PLAG_API_KEY, GOOGLE_CSE_ID as _PLAG_CSE_ID
-    except ImportError:
-        _PLAG_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
-        _PLAG_CSE_ID  = os.environ.get('GOOGLE_CSE_ID', '')
+    _PLAG_API_KEY = os.environ.get('GOOGLE_API_KEY', 'AIzaSyByKbj8_nQr-g4JWQ16lWlMXpDdwUbPj-o')
+    _PLAG_CSE_ID  = os.environ.get('GOOGLE_CSE_ID',  '203a1a5616bee4678')
     _PLAG_AVAILABLE = True
 except Exception as _pe:
     print(f'[Warning] Plagiarism checker unavailable: {_pe}')

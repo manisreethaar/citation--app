@@ -212,6 +212,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   async function fetchPreview() {
+    window._lastBodyText = '';  // reset
     if (!fileInput?.files?.[0]) return;
     btnPreview.textContent = '⏳ Detecting…';
     btnPreview.disabled = true;
@@ -223,10 +224,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const resp = await fetch(window.AUTOCITER?.previewUrl || '/api/preview', { method: 'POST', body: fd });
       const data = await resp.json();
       if (data.error) { showToast('⚠️ ' + data.error); return; }
+      window._lastPreviewData = data;
+      window._lastBodyText    = data.body_text || '';
       renderPreviewModal(data);
       openModal();
       renderSidePanel(data);
       advanceStep(3);
+      // Show AI suggest button if AI available
+      if (window.AUTOCITER?.aiAvailable) {
+        const suggestBtn = document.getElementById('btn-ai-suggest');
+        if (suggestBtn) suggestBtn.style.display = 'block';
+      }
     } catch (_) {
       showToast('Could not fetch preview — you can still process directly.');
     } finally {
@@ -580,3 +588,155 @@ function saveToHistory(entry) {
     localStorage.setItem('autociter_history', JSON.stringify(h));
   } catch (_) {}
 }
+
+
+// ── AI Features ───────────────────────────────────────────────────────────────
+
+async function aiRequest(url, body) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return resp.json();
+}
+
+function renderAiResult(container, data, type='parse') {
+  if (!container) return;
+  container.style.display = 'block';
+  if (data.error) {
+    container.innerHTML = `<div class="ai-error">❌ ${data.error}</div>`;
+    return;
+  }
+  const d = data.data || data;
+  if (type === 'parse' || type === 'complete') {
+    const authors = (d.authors || []).join('; ') || '—';
+    container.innerHTML = `
+      <div class="ai-parsed-card">
+        <div class="ai-parsed-row"><span class="ai-field-label">Authors</span><span>${authors}</span></div>
+        <div class="ai-parsed-row"><span class="ai-field-label">Year</span><span>${d.year || '—'}</span></div>
+        <div class="ai-parsed-row"><span class="ai-field-label">Title</span><span>${d.title || '—'}</span></div>
+        <div class="ai-parsed-row"><span class="ai-field-label">Journal</span><span>${d.journal || '—'}</span></div>
+        ${d.volume ? `<div class="ai-parsed-row"><span class="ai-field-label">Volume</span><span>${d.volume}${d.issue ? '('+d.issue+')' : ''}</span></div>` : ''}
+        ${d.pages  ? `<div class="ai-parsed-row"><span class="ai-field-label">Pages</span><span>${d.pages}</span></div>` : ''}
+        ${d.doi    ? `<div class="ai-parsed-row"><span class="ai-field-label">DOI</span><a href="${d.doi}" target="_blank">${d.doi}</a></div>` : ''}
+        <div style="margin-top:.6rem;display:flex;gap:.5rem">
+          <button class="btn-sm" onclick="addAiParsedRef(${JSON.stringify(d).replace(/"/g,'&quot;')})">➕ Add to list</button>
+          <button class="btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('ai-parse-input')?.value||'').then(()=>showToast('Copied'))">📋 Copy raw</button>
+        </div>
+      </div>`;
+  } else if (type === 'style') {
+    container.innerHTML = `
+      <div class="ai-parsed-card">
+        <div class="ai-parsed-row"><span class="ai-field-label">Detected Style</span><strong style="color:var(--accent)">${d.style || '—'}</strong></div>
+        <div class="ai-parsed-row"><span class="ai-field-label">Explanation</span><span>${d.explanation || '—'}</span></div>
+      </div>`;
+  }
+}
+
+window.addAiParsedRef = function(refData) {
+  if (typeof refData === 'string') { try { refData = JSON.parse(refData); } catch(e) { return; } }
+  addReference({ ...refData, raw: refData.title || 'AI-parsed reference' });
+  showToast('✅ Added to reference list');
+};
+
+// AI Parse button (manual tab)
+document.getElementById('btn-ai-parse')?.addEventListener('click', async () => {
+  const text = document.getElementById('manual-input')?.value.trim();
+  if (!text) { showToast('⚠️ Enter a reference first'); return; }
+  const btn = document.getElementById('btn-ai-parse');
+  btn.textContent = '⏳ Parsing…'; btn.disabled = true;
+  const resultEl = document.getElementById('ai-parse-result');
+  try {
+    const data = await aiRequest(window.AUTOCITER.aiParseUrl, { text });
+    renderAiResult(resultEl, data, 'parse');
+  } finally { btn.textContent = '🤖 AI Parse'; btn.disabled = false; }
+});
+
+// AI Detect Style (manual tab)
+document.getElementById('btn-ai-detect-style')?.addEventListener('click', async () => {
+  const text = document.getElementById('manual-input')?.value.trim();
+  if (!text) { showToast('⚠️ Enter a reference first'); return; }
+  const btn = document.getElementById('btn-ai-detect-style');
+  btn.textContent = '⏳…'; btn.disabled = true;
+  const resultEl = document.getElementById('ai-parse-result');
+  try {
+    const data = await aiRequest(window.AUTOCITER.aiDetectUrl, { text });
+    renderAiResult(resultEl, data, 'style');
+  } finally { btn.textContent = '🔍 Detect Style'; btn.disabled = false; }
+});
+
+// AI Suggest missing citations (preview panel)
+document.getElementById('btn-ai-suggest')?.addEventListener('click', async () => {
+  const btn = document.getElementById('btn-ai-suggest');
+  const panel = document.getElementById('ai-suggest-results');
+  btn.textContent = '⏳ Analysing…'; btn.disabled = true;
+  try {
+    // Send parsed refs + body via JSON (body stored in state from last preview)
+    if (!window._lastPreviewData) { showToast('Preview first to load references'); return; }
+    const data = await aiRequest(window.AUTOCITER.aiSuggestUrl, {
+      body: window._lastBodyText || '',
+      refs: window._lastPreviewData.refs || []
+    });
+    if (!panel) return;
+    panel.style.display = 'block';
+    if (data.error || !data.suggestions?.length) {
+      panel.innerHTML = `<div class="ai-suggest-empty">${data.error ? '❌ '+data.error : '✅ No missing citations detected — good coverage!'}</div>`;
+      return;
+    }
+    panel.innerHTML = `<div class="ai-suggest-label">🤖 AI found ${data.count} potentially uncited claim${data.count > 1 ? 's' : ''}:</div>` +
+      data.suggestions.map(s => `
+        <div class="ai-suggest-item suggest-${s.confidence}">
+          <div class="suggest-sentence">"…${s.sentence}…"</div>
+          <div class="suggest-reason">${s.reason}</div>
+          <span class="suggest-conf suggest-${s.confidence}">${s.confidence === 'high' ? '🔴 High priority' : '🟡 Medium'}</span>
+        </div>`).join('');
+  } finally { btn.textContent = '🤖 Find missing citations with AI'; btn.disabled = false; }
+});
+
+// Standalone AI tab: Parse
+document.getElementById('btn-ai-parse-standalone')?.addEventListener('click', async () => {
+  const text = document.getElementById('ai-parse-input')?.value.trim();
+  if (!text) { showToast('⚠️ Enter a reference first'); return; }
+  const btn = document.getElementById('btn-ai-parse-standalone');
+  btn.textContent = '⏳ Parsing…'; btn.disabled = true;
+  try {
+    const data = await aiRequest(window.AUTOCITER.aiParseUrl, { text });
+    renderAiResult(document.getElementById('ai-parse-standalone-result'), data, 'parse');
+  } finally { btn.textContent = '🤖 Parse with Gemini'; btn.disabled = false; }
+});
+
+// Standalone AI tab: Complete
+document.getElementById('btn-ai-complete')?.addEventListener('click', async () => {
+  const author  = document.getElementById('ai-comp-author')?.value.trim();
+  const year    = document.getElementById('ai-comp-year')?.value.trim();
+  const title   = document.getElementById('ai-comp-title')?.value.trim();
+  const journal = document.getElementById('ai-comp-journal')?.value.trim();
+  if (!title && !author) { showToast('⚠️ Provide at least an author or title'); return; }
+  const btn = document.getElementById('btn-ai-complete');
+  btn.textContent = '⏳ Completing…'; btn.disabled = true;
+  const partial = {};
+  if (author)  partial.authors = [author];
+  if (year)    partial.year    = year;
+  if (title)   partial.title   = title;
+  if (journal) partial.journal = journal;
+  try {
+    const data = await aiRequest(window.AUTOCITER.aiCompleteUrl, { partial });
+    renderAiResult(document.getElementById('ai-complete-result'), data, 'complete');
+  } finally { btn.textContent = '🤖 Complete Reference'; btn.disabled = false; }
+});
+
+// Standalone AI tab: Detect style
+document.getElementById('btn-ai-detect')?.addEventListener('click', async () => {
+  const text = document.getElementById('ai-style-input')?.value.trim();
+  if (!text) { showToast('⚠️ Enter a reference first'); return; }
+  const btn = document.getElementById('btn-ai-detect');
+  btn.textContent = '⏳…'; btn.disabled = true;
+  try {
+    const data = await aiRequest(window.AUTOCITER.aiDetectUrl, { text });
+    renderAiResult(document.getElementById('ai-style-result'), data, 'style');
+  } finally { btn.textContent = '🔍 Identify Style'; btn.disabled = false; }
+});
+
+// Store preview data for AI suggest
+const _origFetchPreview = window._fetchPreviewFn;

@@ -37,6 +37,14 @@ from diff_engine         import build_diff_chunks
 from database            import Database
 from doi_fetcher         import fetch_by_doi, fetch_by_pmid, search_crossref
 
+# Optional: Gemini AI features
+try:
+    import ai_assistant
+    _AI_AVAILABLE = ai_assistant.is_available()
+except Exception:
+    ai_assistant  = None
+    _AI_AVAILABLE = False
+
 # Optional: PyMuPDF for PDF support
 try:
     from file_handlers import read_pdf
@@ -109,6 +117,7 @@ def index():
         max_size_mb=MAX_FILE_SIZE // 1024 // 1024,
         supported_styles=SUPPORTED_STYLES,
         default_style=prefs.get('default_style', 'apa'),
+        ai_available=_AI_AVAILABLE,
     )
 
 
@@ -572,6 +581,95 @@ def _build_result_context(entry: dict, result_id: str) -> dict:
 
 
 # ── Batch processing ──────────────────────────────────────────────────────────
+
+
+# -- AI Endpoints -------------------------------------------------------------
+
+@app.route('/api/ai/status')
+def api_ai_status():
+    return jsonify({'available': _AI_AVAILABLE,
+                    'model': os.environ.get('GEMINI_MODEL','gemini-2.0-flash') if _AI_AVAILABLE else None})
+
+@app.route('/api/ai/parse', methods=['POST'])
+def api_ai_parse():
+    if not _AI_AVAILABLE:
+        return jsonify({'error': 'AI not available. Set GEMINI_API_KEY.'}), 503
+    data = request.get_json(silent=True) or {}
+    raw  = (data.get('text') or '').strip()
+    if not raw:
+        return jsonify({'error': 'No text provided'}), 400
+    try:
+        result = ai_assistant.ai_parse_reference(raw)
+        if not result:
+            return jsonify({'error': 'AI could not parse this reference.'}), 200
+        return jsonify({'ok': True, 'data': result})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ai/suggest', methods=['POST'])
+def api_ai_suggest():
+    if not _AI_AVAILABLE:
+        return jsonify({'error': 'AI not available. Set GEMINI_API_KEY.'}), 503
+    body_text = ''
+    refs_data = []
+    if request.is_json:
+        data      = request.get_json(silent=True) or {}
+        body_text = data.get('body', '')
+        refs_data = data.get('refs', [])
+    elif 'document' in request.files:
+        f = request.files['document']
+        if f and allowed_file(f.filename):
+            from werkzeug.utils import secure_filename
+            filename = secure_filename(f.filename)
+            import uuid as _uuid, pathlib as _pl
+            tmp_path = os.path.join(_upload_folder(), _uuid.uuid4().hex + '_' + filename)
+            f.save(tmp_path)
+            try:
+                ext = _pl.Path(filename).suffix.lower()
+                full_text = read_docx(tmp_path)[0] if ext == '.docx' else read_text(tmp_path)
+                body_text, ref_section = split_references_from_body(full_text)
+                refs_data = [{'index': r.index, 'authors': r.authors, 'year': r.year}
+                             for r in parse_references(ref_section)]
+            finally:
+                try: os.remove(tmp_path)
+                except OSError: pass
+    if not body_text.strip():
+        return jsonify({'error': 'Empty document body'}), 400
+    try:
+        suggestions = ai_assistant.ai_suggest_missing_citations(body_text, refs_data)
+        return jsonify({'ok': True, 'suggestions': suggestions, 'count': len(suggestions)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ai/complete', methods=['POST'])
+def api_ai_complete():
+    if not _AI_AVAILABLE:
+        return jsonify({'error': 'AI not available. Set GEMINI_API_KEY.'}), 503
+    data    = request.get_json(silent=True) or {}
+    partial = data.get('partial', {})
+    if not partial:
+        return jsonify({'error': 'No partial reference provided'}), 400
+    try:
+        completed = ai_assistant.ai_complete_reference(partial)
+        return jsonify({'ok': True, 'data': completed})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ai/detect-style', methods=['POST'])
+def api_ai_detect_style():
+    if not _AI_AVAILABLE:
+        return jsonify({'error': 'AI not available.'}), 503
+    data = request.get_json(silent=True) or {}
+    raw  = (data.get('text') or '').strip()
+    if not raw:
+        return jsonify({'error': 'No text provided'}), 400
+    try:
+        result = ai_assistant.ai_detect_style(raw)
+        if result:
+            return jsonify({'ok': True, **result})
+        return jsonify({'error': 'Could not detect style.'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/batch', methods=['POST'])
 def batch_process():

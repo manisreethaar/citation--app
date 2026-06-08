@@ -35,6 +35,9 @@
     <button class="tab-btn active" data-tab="single" id="tab-single">📄 Single Document</button>
     <button class="tab-btn" data-tab="batch" id="tab-batch">📦 Batch Processing</button>
     <button class="tab-btn" data-tab="doi" id="tab-doi">🔗 DOI Lookup</button>
+    {% if ai_available %}
+    <button class="tab-btn" data-tab="ai" id="tab-ai">🤖 AI Assistant <span class="tab-ai-badge">NEW</span></button>
+    {% endif %}
   </div>
 </div>
 
@@ -135,9 +138,14 @@
           <div class="sub-tab-content" id="subtab-manual-add">
             <textarea class="text-area" id="manual-input" rows="4"
                       placeholder="Smith J, Jones A. Title of paper. Nature. 2020;10:1-5."></textarea>
-            <button type="button" class="btn-secondary" style="margin-top:.6rem" id="btn-add-manual">
-              ➕ Add Reference
-            </button>
+            <div style="display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.6rem">
+              <button type="button" class="btn-secondary" id="btn-add-manual">➕ Add Reference</button>
+              {% if ai_available %}
+              <button type="button" class="btn-ai" id="btn-ai-parse" title="Use Gemini AI to parse this reference">🤖 AI Parse</button>
+              <button type="button" class="btn-ai btn-ai-outline" id="btn-ai-detect-style" title="Detect citation style with AI">🔍 Detect Style</button>
+              {% endif %}
+            </div>
+            <div id="ai-parse-result" class="ai-result-box" style="display:none"></div>
           </div>
 
           <!-- Added references list -->
@@ -253,6 +261,12 @@
     <div class="card info-card" id="preview-panel" style="display:none">
       <h3>🔍 Detected references <span class="badge" id="ref-count-badge">0</span><span id="detected-mode-badge"></span></h3>
       <div id="ref-preview-list" class="ref-preview-list"></div>
+      {% if ai_available %}
+      <button type="button" class="btn-ai btn-ai-suggest" id="btn-ai-suggest" style="display:none;margin-top:.75rem;width:100%">
+        🤖 Find missing citations with AI
+      </button>
+      <div id="ai-suggest-results" class="ai-suggest-panel" style="display:none"></div>
+      {% endif %}
       <div class="confidence-legend">
         <span class="conf-dot conf-high"></span> High (≥85%)
         <span class="conf-dot conf-medium"></span> Medium (60–84%)
@@ -355,6 +369,87 @@
 </div>
 </div><!-- end doi tab -->
 
+
+<!-- ═══════════════ AI TAB ═══════════════ -->
+{% if ai_available %}
+<div class="tab-content" id="tab-content-ai">
+<div class="ai-container">
+
+  <!-- AI status banner -->
+  <div class="ai-banner">
+    <div class="ai-banner-icon">🤖</div>
+    <div>
+      <div class="ai-banner-title">Gemini AI Assistant</div>
+      <div class="ai-banner-sub">Powered by Google Gemini · Understands all citation formats</div>
+    </div>
+    <span class="ai-live-badge">LIVE</span>
+  </div>
+
+  <!-- AI Parse card -->
+  <div class="card ai-feature-card">
+    <div class="card-header">
+      <span class="step-badge" style="background:rgba(163,247,113,.1);border-color:rgba(163,247,113,.3);color:#56d364">✦</span>
+      <h2>Parse any reference format</h2>
+    </div>
+    <p class="info-text" style="margin-bottom:.75rem">Paste any messy, unknown, or non-standard reference — AI will extract all fields automatically.</p>
+    <textarea class="text-area" id="ai-parse-input" rows="3"
+              placeholder="Paste any reference here, e.g.&#10;Smith J et al. 2020. A great study of neurons in the brain. Nature Neuroscience vol10 pp1-5. doi:10.1038/nn.2020.01"></textarea>
+    <button type="button" class="btn-ai" id="btn-ai-parse-standalone" style="margin-top:.6rem">
+      🤖 Parse with Gemini
+    </button>
+    <div id="ai-parse-standalone-result" class="ai-result-box" style="display:none;margin-top:.75rem"></div>
+  </div>
+
+  <!-- AI Complete card -->
+  <div class="card ai-feature-card">
+    <div class="card-header">
+      <span class="step-badge" style="background:rgba(163,247,113,.1);border-color:rgba(163,247,113,.3);color:#56d364">✦</span>
+      <h2>Complete a partial reference</h2>
+    </div>
+    <p class="info-text" style="margin-bottom:.75rem">Have part of a reference? AI fills in the missing fields from its knowledge base.</p>
+    <div class="ai-fields-grid">
+      <div class="ai-field-group">
+        <label class="form-label">First author surname</label>
+        <input type="text" class="text-input" id="ai-comp-author" placeholder="e.g. Smith">
+      </div>
+      <div class="ai-field-group">
+        <label class="form-label">Year</label>
+        <input type="text" class="text-input" id="ai-comp-year" placeholder="e.g. 2020" style="max-width:120px">
+      </div>
+      <div class="ai-field-group" style="grid-column:1/-1">
+        <label class="form-label">Title (partial is fine)</label>
+        <input type="text" class="text-input" id="ai-comp-title" placeholder="e.g. deep learning attention mechanism">
+      </div>
+      <div class="ai-field-group">
+        <label class="form-label">Journal (optional)</label>
+        <input type="text" class="text-input" id="ai-comp-journal" placeholder="e.g. Nature">
+      </div>
+    </div>
+    <button type="button" class="btn-ai" id="btn-ai-complete" style="margin-top:.75rem">
+      🤖 Complete Reference
+    </button>
+    <div id="ai-complete-result" class="ai-result-box" style="display:none;margin-top:.75rem"></div>
+  </div>
+
+  <!-- AI Detect Style card -->
+  <div class="card ai-feature-card">
+    <div class="card-header">
+      <span class="step-badge" style="background:rgba(163,247,113,.1);border-color:rgba(163,247,113,.3);color:#56d364">✦</span>
+      <h2>Detect citation style</h2>
+    </div>
+    <p class="info-text" style="margin-bottom:.75rem">Paste a reference and AI tells you which style it's written in and why.</p>
+    <textarea class="text-area" id="ai-style-input" rows="2"
+              placeholder="Smith, J., & Jones, A. (2020). Title of paper. Journal Name, 10(2), 1-5."></textarea>
+    <button type="button" class="btn-ai" id="btn-ai-detect" style="margin-top:.6rem">
+      🔍 Identify Style
+    </button>
+    <div id="ai-style-result" class="ai-result-box" style="display:none;margin-top:.75rem"></div>
+  </div>
+
+</div>
+</div>
+{% endif %}<!-- end ai tab -->
+
 <!-- Reference preview modal -->
 <div id="preview-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" style="display:none">
   <div class="modal-backdrop" id="modal-backdrop"></div>
@@ -383,6 +478,11 @@ window.AUTOCITER = {
   doiUrl:     "{{ url_for('api_doi', doi='__DOI__') }}".replace('__DOI__', ''),
   pmidUrl:    "{{ url_for('api_pmid', pmid='__PMID__') }}".replace('__PMID__', ''),
   searchUrl:  "{{ url_for('api_search') }}",
+  aiParseUrl:  "{{ url_for('api_ai_parse') }}",
+  aiSuggestUrl:"{{ url_for('api_ai_suggest') }}",
+  aiCompleteUrl:"{{ url_for('api_ai_complete') }}",
+  aiDetectUrl: "{{ url_for('api_ai_detect_style') }}",
+  aiAvailable: {{ 'true' if ai_available else 'false' }},
 };
 </script>
 {% endblock %}

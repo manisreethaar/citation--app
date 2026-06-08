@@ -29,6 +29,12 @@ import urllib.error
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+try:
+    from config import GOOGLE_API_KEY as _CFG_API_KEY, GOOGLE_CSE_ID as _CFG_CSE_ID
+except ImportError:
+    _CFG_API_KEY = ''
+    _CFG_CSE_ID  = ''
+
 from plagiarism_engine import (
     _normalize, _words, _shingles, _jaccard,
     _rare_phrase_overlap, EXACT_THRESHOLD, _STOPWORDS
@@ -173,8 +179,8 @@ def web_check(
     Returns list of WebMatch objects for any sentences with web matches.
     Returns [] if no API key is configured (graceful degradation).
     """
-    api_key = api_key or os.environ.get('GOOGLE_API_KEY', '')
-    cse_id  = cse_id  or os.environ.get('GOOGLE_CSE_ID', '')
+    api_key = api_key or os.environ.get('GOOGLE_API_KEY', '') or _CFG_API_KEY
+    cse_id  = cse_id  or os.environ.get('GOOGLE_CSE_ID', '')  or _CFG_CSE_ID
 
     if not api_key or not cse_id:
         print(
@@ -243,9 +249,4 @@ def web_check(
                             snippet=snippet,
                             jaccard=j_page,
                             rare_phrases=rp_page,
-                            query_used=query,
-                        ))
-                        break
-
-    print(f"[web_checker] Done. {queries_used} queries used, {len(matches)} web matches found.")
-    return matches
+                            query_

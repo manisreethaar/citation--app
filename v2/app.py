@@ -18,6 +18,12 @@ from pipeline import run_pipeline
 from file_io import read_file, write_file
 from style_engine import SUPPORTED_STYLES
 
+try:
+    from config import GOOGLE_API_KEY as _API_KEY, GOOGLE_CSE_ID as _CSE_ID
+except ImportError:
+    _API_KEY = ''
+    _CSE_ID  = ''
+
 app = Flask(__name__)
 app.secret_key = 'auto-citer-v2-2024'
 UPLOAD_DIR = tempfile.mkdtemp(prefix='autociter_v2_')
@@ -239,8 +245,4 @@ def process():
             zf.write(output_path, out_name)
             zf.write(report_path, report_name)
 
-        return send_file(zip_path, as_attachment=True, download_name=zip_name)
-
-    except (ValueError, SystemExit) as e:
-        flash(str(e), 'error')
-        return redirect(url_for('index')
+        return send_file(zip_path, as_attachment=True, 

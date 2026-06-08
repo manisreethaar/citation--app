@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Processing History — Auto-Citer{% endblock %}
+{% block content %}
+<div class="history-page">
+  <div class="page-header">
+    <h1>📂 Processing History</h1>
+    <p class="page-sub">Your recently processed documents (stored locally in this browser session)</p>
+    <button class="btn-secondary" onclick="clearHistory()">🗑 Clear History</button>
+  </div>
+
+  <div class="card">
+    <div id="history-empty" class="empty-state" style="display:none">
+      <div class="empty-icon">📭</div>
+      <p>No documents processed yet.</p>
+      <a href="{{ url_for('index') }}" class="btn-primary" style="display:inline-flex;margin-top:1rem">Get Started</a>
+    </div>
+    <table class="history-table" id="history-table">
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Style</th>
+          <th>References</th>
+          <th>Cited</th>
+          <th>Confidence</th>
+          <th>Date</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="history-tbody">
+        <!-- Populated by JS from localStorage -->
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function loadHistory() {
+  const history = JSON.parse(localStorage.getItem('autociter_history') || '[]');
+  const tbody = document.getElementById('history-tbody');
+  const emptyState = document.getElementById('history-empty');
+  const table = document.getElementById('history-table');
+
+  if (!history.length) {
+    emptyState.style.display = 'flex';
+    table.style.display = 'none';
+    return;
+  }
+
+  tbody.innerHTML = history.reverse().map(h => `
+    <tr>
+      <td><span class="file-name-cell" title="${h.filename}">${h.filename}</span></td>
+      <td><span class="style-badge">${h.style.toUpperCase()}</span></td>
+      <td>${h.total_refs ?? '—'}</td>
+      <td>${h.cited_refs ?? '—'}</td>
+      <td>
+        <div class="mini-bar-wrap">
+          <div class="mini-bar" style="width:${h.avg_confidence ?? 0}%"></div>
+        </div>
+        <span>${h.avg_confidence ?? '—'}%</span>
+      </td>
+      <td class="date-cell">${new Date(h.date).toLocaleDateString()}</td>
+      <td>
+        ${h.download_url ? `<a href="${h.download_url}" class="btn-sm" download>⬇ Download</a>` : ''}
+        ${h.result_id ? `<a href="/result/${h.result_id}" class="btn-sm">👁 View</a>` : ''}
+      </td>
+    </tr>
+  `).join('');
+}
+
+function clearHistory() {
+  if (confirm('Clear all history? This cannot be undone.')) {
+    localStorage.removeItem('autociter_history');
+    loadHistory();
+  }
+}
+
+loadHistory();
+</script>
+{% endblock %}

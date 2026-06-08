@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="{{ description | default('Auto-Citer: Automatically insert APA, Vancouver, IEEE, Nature, MLA, Chicago, Harvard and AMA citations into your research documents.') }}">
+  <title>{% block title %}Auto-Citer — Smart Academic Citation Tool{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+
+  <!-- Theme toggle -->
+  <button class="theme-toggle" id="theme-toggle" title="Toggle dark/light mode" aria-label="Toggle theme">
+    <span class="theme-icon-dark">🌙</span>
+    <span class="theme-icon-light">☀️</span>
+  </button>
+
+  <!-- Processing overlay -->
+  <div id="processing-overlay" role="status" aria-live="polite">
+    <div class="overlay-card">
+      <div class="spinner-ring"></div>
+      <div class="processing-steps" id="processing-steps">
+        <div class="proc-step active" id="step-reading">📖 Reading document…</div>
+        <div class="proc-step" id="step-parsing">🔍 Parsing references…</div>
+        <div class="proc-step" id="step-matching">🎯 Matching citations…</div>
+        <div class="proc-step" id="step-writing">✍️ Writing output…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Navigation -->
+  <nav class="navbar">
+    <a href="{{ url_for('index') }}" class="nav-brand">
+      📚 <span>Auto-Citer</span>
+    </a>
+    <div class="nav-links">
+      <a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">Home</a>
+      <a href="{{ url_for('history_page') }}" class="nav-link {% if request.endpoint == 'history_page' %}active{% endif %}">History</a>
+      <a href="https://github.com/manisreethaar/citation--app" target="_blank" rel="noopener" class="nav-link nav-gh">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </nav>
+
+  <!-- Flash messages -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-container">
+      {% for cat, msg in messages %}
+        <div class="alert alert-{{ cat }}" role="alert">
+          <span class="alert-icon">{{ '✗' if cat == 'error' else ('⚠' if cat == 'warning' else '✓') }}</span>
+          <span>{{ msg }}</span>
+          <button class="alert-close" onclick="this.parentElement.remove()" aria-label="Close">✕</button>
+        </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endwith %}
+
+  <!-- Page content -->
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>
+    <div class="footer-inner">
+      <span>Auto-Citer &mdash; Open-source academic citation tool</span>
+      <div class="footer-links">
+        <a href="https://github.com/manisreethaar/citation--app" target="_blank" rel="noopener">GitHub</a>
+        <span class="footer-dot">·</span>
+        <a href="{{ url_for('health') }}">API Status</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

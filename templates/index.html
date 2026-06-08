@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+
+{% block title %}Auto-Citer — Smart Academic Citation Tool{% endblock %}
+
+{% block content %}
+
+<!-- Hero -->
+<div class="hero">
+  <div class="hero-inner">
+    <div class="hero-badge">✦ Academic Tool · 6 Citation Styles</div>
+    <h1>Insert Citations<br><span class="gradient-text">Automatically</span></h1>
+    <p class="hero-sub">Upload your research document — Auto-Citer detects references, matches author mentions in the body, and formats everything to your chosen style.</p>
+    <div class="hero-chips">
+      <span class="chip">APA 7th</span>
+      <span class="chip">Vancouver</span>
+      <span class="chip">IEEE</span>
+      <span class="chip">Nature</span>
+      <span class="chip">MLA 9th</span>
+      <span class="chip">Chicago</span>
+    </div>
+  </div>
+</div>
+
+<!-- Stats bar -->
+<div class="stats-bar">
+  <div class="stat-item"><strong>6</strong> Citation Styles</div>
+  <div class="stat-divider"></div>
+  <div class="stat-item"><strong>3</strong> File Formats</div>
+  <div class="stat-divider"></div>
+  <div class="stat-item"><strong>∞</strong> References</div>
+  <div class="stat-divider"></div>
+  <div class="stat-item"><strong>0</strong> Manual Work</div>
+</div>
+
+<!-- Main content grid -->
+<div class="page-grid">
+
+  <!-- Left: Form -->
+  <div class="form-col">
+
+    <!-- Step progress -->
+    <div class="steps-bar">
+      <div class="step-item active" id="bar-step-1">
+        <div class="step-dot">1</div>
+        <div class="step-label">Upload</div>
+      </div>
+      <div class="step-line"></div>
+      <div class="step-item" id="bar-step-2">
+        <div class="step-dot">2</div>
+        <div class="step-label">Preview</div>
+      </div>
+      <div class="step-line"></div>
+      <div class="step-item" id="bar-step-3">
+        <div class="step-dot">3</div>
+        <div class="step-label">Process</div>
+      </div>
+      <div class="step-line"></div>
+      <div class="step-item" id="bar-step-4">
+        <div class="step-dot">4</div>
+        <div class="step-label">Done</div>
+      </div>
+    </div>
+
+    <form method="POST" action="{{ url_for('process') }}" enctype="multipart/form-data" id="upload-form">
+
+      <!-- Card 1: Upload -->
+      <div class="card" id="card-upload">
+        <div class="card-header">
+          <span class="step-badge">1</span>
+          <h2>Upload your document</h2>
+        </div>
+        <div class="drop-zone" id="drop-zone" role="button" tabindex="0"
+             aria-label="Drop zone: click or drag a file here">
+          <div class="dz-icon">📄</div>
+          <p class="dz-main">Drag &amp; drop your file here, or <span class="browse-link">browse</span></p>
+          <div class="dz-tags">
+            <span class="dz-tag">.docx</span>
+            <span class="dz-tag">.pdf</span>
+            <span class="dz-tag">.txt</span>
+            <span class="dz-tag">Max {{ max_size_mb }} MB</span>
+          </div>
+          <div id="file-info" class="file-info" aria-live="polite"></div>
+        </div>
+        <input type="file" id="file-input" name="document" accept=".docx,.pdf,.txt" aria-label="Document upload">
+
+        <!-- Preview button (appears after file selected) -->
+        <button type="button" class="btn-preview" id="btn-preview" style="display:none">
+          🔍 Preview detected references
+        </button>
+      </div>
+
+      <!-- Card 2: Style -->
+      <div class="card" id="card-style">
+        <div class="card-header">
+          <span class="step-badge">2</span>
+          <h2>Choose citation style</h2>
+        </div>
+        <div class="style-grid" id="style-grid">
+          {% set styles = [
+            ('apa',       'APA 7th',       'Author–year · Social sciences',        '(Smith et al., 2020)'),
+            ('vancouver', 'Vancouver',      'Numbered · Biomedical journals',        '[1], [2], [3]'),
+            ('ieee',      'IEEE',           'Numbered · Engineering &amp; CS',       '[1], [2], [3]'),
+            ('nature',    'Nature / Cell',  'Superscript · High-impact science',     '¹·² or [1]'),
+            ('mla',       'MLA 9th',        'Author-page · Humanities',              '(Smith 42)'),
+            ('chicago',   'Chicago 17th',   'Author-date · History &amp; arts',      '(Smith 2020)'),
+          ] %}
+          {% for value, name, desc, example in styles %}
+          <label class="style-card {% if loop.first %}selected{% endif %}" id="card-{{ value }}">
+            <input type="radio" name="style" value="{{ value }}" {% if loop.first %}checked{% endif %}>
+            <div class="style-name">{{ name }}</div>
+            <div class="style-desc">{{ desc }}</div>
+            <div class="style-example">{{ example }}</div>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Card 3: Options -->
+      <div class="card" id="card-options">
+        <div class="card-header">
+          <span class="step-badge">3</span>
+          <h2>Options</h2>
+        </div>
+        <div class="options-list">
+          <label class="toggle-row">
+            <input type="checkbox" name="report" value="1" id="opt-report">
+            <span class="toggle-track"></span>
+            <div class="toggle-text-group">
+              <span class="toggle-title">Confidence report</span>
+              <span class="toggle-sub">Append a per-reference match report to the output</span>
+            </div>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" name="strict_only" value="1" id="opt-strict">
+            <span class="toggle-track"></span>
+            <div class="toggle-text-group">
+              <span class="toggle-title">Strict matching only</span>
+              <span class="toggle-sub">Only insert citations where author AND year are both found</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Submit -->
+      <button type="submit" class="btn-submit" id="submit-btn" disabled>
+        <span class="btn-icon">✨</span>
+        <span class="btn-text">Insert Citations &amp; Download</span>
+      </button>
+      <p class="submit-hint" id="submit-hint">Select a file above to continue</p>
+
+    </form>
+  </div>
+
+  <!-- Right: Info panel -->
+  <div class="info-col">
+
+    <!-- How it works -->
+    <div class="card info-card">
+      <h3>💡 How it works</h3>
+      <ol class="how-list">
+        <li>
+          <span class="how-num">1</span>
+          <div>
+            <strong>Upload</strong> — a document with body text <em>and</em> a
+            "References" section at the end.
+          </div>
+        </li>
+        <li>
+          <span class="how-num">2</span>
+          <div>
+            <strong>Detect</strong> — the tool finds every reference and
+            scans the body for author name &amp; year patterns.
+          </div>
+        </li>
+        <li>
+          <span class="how-num">3</span>
+          <div>
+            <strong>Insert</strong> — citations are inserted inline and the
+            bibliography is reformatted to your style.
+          </div>
+        </li>
+      </ol>
+    </div>
+
+    <!-- Document format guide -->
+    <div class="card info-card">
+      <h3>📄 Document format</h3>
+      <p class="info-text">Your document must end with one of these headings:</p>
+      <div class="code-block">References<br>Bibliography<br>Works Cited<br>Literature Cited</div>
+      <p class="info-text" style="margin-top:.75rem;">Followed by your reference list, one per line.</p>
+    </div>
+
+    <!-- Quick stats -->
+    <div class="card info-card" id="preview-panel" style="display:none">
+      <h3>🔍 Detected references <span class="badge" id="ref-count-badge">0</span></h3>
+      <div id="ref-preview-list" class="ref-preview-list"></div>
+      <div class="confidence-legend">
+        <span class="conf-dot conf-high"></span> High (90%+)
+        <span class="conf-dot conf-medium"></span> Medium (70–90%)
+        <span class="conf-dot conf-low"></span> Low (&lt;70%)
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Reference preview modal -->
+<div id="preview-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" style="display:none">
+  <div class="modal-backdrop" id="modal-backdrop"></div>
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2 id="modal-title">📋 Detected References</h2>
+      <button class="modal-close" id="modal-close" aria-label="Close modal">✕</button>
+    </div>
+    <p class="modal-sub">Review the references found in your document before processing.</p>
+    <div id="modal-ref-list" class="modal-ref-list"></div>
+    <div class="modal-footer">
+      <button class="btn-secondary" id="modal-cancel">Cancel</button>
+      <button class="btn-primary" id="modal-proceed">✨ Process Document</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Pass server config to JS
+window.AUTOCITER = {
+  maxSizeMB: {{ max_size_mb }},
+  previewUrl: "{{ url_for('api_preview') }}",
+  processUrl: "{{ url_for('process') }}"
+};
+</script>
+{% endblock %}

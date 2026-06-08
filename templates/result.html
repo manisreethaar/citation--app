@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+
+{% block title %}Results — {{ filename }} — Auto-Citer{% endblock %}
+
+{% block content %}
+<div class="result-page">
+
+  <!-- Result header -->
+  <div class="result-hero">
+    <div class="result-hero-inner">
+      <div class="result-status-icon">✅</div>
+      <h1>Citations Inserted!</h1>
+      <p>Processed <strong>{{ filename }}</strong> with <strong>{{ style | upper }}</strong> style</p>
+    </div>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="summary-strip">
+    <div class="summary-card">
+      <div class="summary-num">{{ total_refs }}</div>
+      <div class="summary-label">Total References</div>
+    </div>
+    <div class="summary-card success">
+      <div class="summary-num">{{ cited_refs }}</div>
+      <div class="summary-label">Citations Inserted</div>
+    </div>
+    <div class="summary-card warning">
+      <div class="summary-num">{{ total_refs - cited_refs }}</div>
+      <div class="summary-label">Not Found in Text</div>
+    </div>
+    <div class="summary-card info">
+      <div class="summary-num">{{ "%.0f" | format(avg_confidence) }}%</div>
+      <div class="summary-label">Avg. Confidence</div>
+    </div>
+  </div>
+
+  <!-- Action bar -->
+  <div class="action-bar">
+    <a href="{{ download_url }}" class="btn-primary btn-download" id="btn-download">
+      ⬇️ Download {{ out_filename }}
+    </a>
+    <button class="btn-secondary" id="btn-copy-report" onclick="copyReport()">
+      📋 Copy Report
+    </button>
+    <a href="{{ url_for('index') }}" class="btn-secondary">
+      ↩ Process Another
+    </a>
+    <button class="btn-secondary" id="btn-share" onclick="shareResult()">
+      🔗 Share Link
+    </button>
+  </div>
+
+  <div class="result-grid">
+
+    <!-- Diff view -->
+    <div class="card result-card">
+      <div class="card-header">
+        <h2>📝 Diff View <span class="tag tag-blue">Before → After</span></h2>
+        <div class="diff-legend">
+          <span class="diff-badge added">inserted</span>
+          <span class="diff-badge unchanged">unchanged</span>
+        </div>
+      </div>
+      <div class="diff-container" id="diff-container">
+        {% for chunk in diff_chunks %}
+          {% if chunk.type == 'inserted' %}
+            <span class="diff-ins" title="Citation inserted">{{ chunk.text }}</span>
+          {% elif chunk.type == 'context' %}
+            <span class="diff-ctx">{{ chunk.text }}</span>
+          {% else %}
+            <span class="diff-norm">{{ chunk.text }}</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Confidence report -->
+    <div class="card result-card">
+      <div class="card-header">
+        <h2>🎯 Confidence Report</h2>
+      </div>
+      <div class="conf-table" id="conf-table">
+        {% for ref in confidence_report %}
+        <div class="conf-row conf-{{ ref.tier }}">
+          <div class="conf-index">[{{ ref.index }}]</div>
+          <div class="conf-info">
+            <div class="conf-author">{{ ref.author }}</div>
+            <div class="conf-year">{{ ref.year or 'n.d.' }}</div>
+          </div>
+          <div class="conf-right">
+            <div class="conf-bar-wrap">
+              <div class="conf-bar" style="width: {{ ref.confidence }}%"></div>
+            </div>
+            <div class="conf-pct">{{ ref.confidence }}%</div>
+            <div class="conf-status">{{ ref.status }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="conf-report-text" id="conf-report-text" style="display:none">
+        {% for ref in confidence_report %}[{{ ref.index }}] {{ ref.status }} — {{ ref.author }} ({{ ref.year or 'n.d.' }}) — {{ ref.confidence }}%
+{% endfor %}</div>
+    </div>
+
+  </div>
+
+  <!-- Copyable citation list -->
+  <div class="card" style="margin: 0 auto; max-width: 900px;">
+    <div class="card-header">
+      <h2>📚 Formatted Bibliography</h2>
+      <button class="btn-icon-sm" onclick="copyBibliography()" title="Copy bibliography">📋</button>
+    </div>
+    <pre class="bib-block" id="bib-block">{{ bibliography }}</pre>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+window.RESULT = {
+  reportText: document.getElementById('conf-report-text')?.innerText || '',
+  bibliography: document.getElementById('bib-block')?.innerText || '',
+  shareUrl: "{{ url_for('share_result', result_id=result_id) }}",
+  downloadUrl: "{{ download_url }}"
+};
+
+function copyReport() {
+  navigator.clipboard.writeText(window.RESULT.reportText).then(() => {
+    const btn = document.getElementById('btn-copy-report');
+    btn.textContent = '✅ Copied!';
+    setTimeout(() => btn.textContent = '📋 Copy Report', 2000);
+  });
+}
+
+function copyBibliography() {
+  navigator.clipboard.writeText(window.RESULT.bibliography).then(() => {
+    showToast('Bibliography copied!');
+  });
+}
+
+function shareResult() {
+  const btn = document.getElementById('btn-share');
+  btn.textContent = '⏳ Generating…';
+  fetch(window.RESULT.shareUrl, { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.url) {
+        navigator.clipboard.writeText(data.url);
+        showToast('Share link copied to clipboard! Valid for 24 hours.');
+        btn.textContent = '✅ Link Copied';
+      }
+    })
+    .catch(() => {
+      showToast('Could not generate share link.');
+      btn.textContent = '🔗 Share Link';
+    });
+}
+
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.classList.add('toast-show'), 10);
+  setTimeout(() => { t.classList.remove('toast-show'); setTimeout(() => t.remove(), 300); }, 3000);
+}
+
+// Auto-trigger download
+window.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => {
+    document.getElementById('btn-download')?.click();
+  }, 800);
+});
+</script>
+{% endblock %}

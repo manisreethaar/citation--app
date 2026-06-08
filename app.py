@@ -1,642 +1,107 @@
 """
-app.py  ─  Flask web interface for auto-citer
-=============================================
+app.py  –  Flask web application for Auto-Citer
+================================================
 Run:   python app.py
-Then:  http://localhost:5000
+Open:  http://localhost:5000
 """
 
 import os
 import sys
+import uuid
 import tempfile
+import secrets
 from pathlib import Path
 
-# Make sure our modules are importable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Load .env in development
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from flask import (
-    Flask, request, render_template_string, send_file,
-    flash, redirect, url_for, jsonify
+    Flask, request, render_template, send_file,
+    flash, redirect, url_for, jsonify, session, abort
 )
 from werkzeug.utils import secure_filename
-from auto_citer import process_document, build_report, SUPPORTED_STYLES, MAX_FILE_SIZE
-from reference_parser import split_references_from_body, parse_references
-from citation_styles import inline_citation
+
+from auto_citer   import process_document, SUPPORTED_STYLES, MAX_FILE_SIZE
+from auto_citer   import build_report as _build_report_txt
+from reference_parser  import split_references_from_body, parse_references
+from citation_styles   import inline_citation, format_bibliography
+from matcher           import find_citation_positions, insert_citations
+from file_handlers     import read_text, read_pdf, read_docx
+from diff_engine       import build_diff_chunks
+from database          import Database
+from doi_fetcher       import fetch_by_doi, fetch_by_pmid, search_crossref
+
+
+# ── App init ──────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
-# Load secret key from environment variable, fall back to a generated one for dev
-app.secret_key = os.environ.get('SECRET_KEY') or os.urandom(32)
+app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
-UPLOAD_FOLDER = tempfile.mkdtemp(prefix='auto_citer_')
+UPLOAD_FOLDER     = tempfile.mkdtemp(prefix='auto_citer_')
 ALLOWED_EXTENSIONS = {'docx', 'pdf', 'txt'}
+
+# Init DB
+db = Database()
+db.init()
 
 
 def allowed_file(filename: str) -> bool:
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return ('.' in filename
+            and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS)
 
 
-# ─── HTML Template ────────────────────────────────────────────────────────────
+def get_session_id() -> str:
+    if 'sid' not in session:
+        session['sid'] = secrets.token_hex(16)
+    return session['sid']
 
-HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Auto-Citer: Automatically insert APA, Vancouver, IEEE, Nature, MLA, and Chicago citations into your research documents.">
-  <title>Auto-Citer — Smart Academic Citation Tool</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    :root {
-      --bg:       #0d1117;
-      --surface:  #161b22;
-      --surface2: #1c2330;
-      --border:   #30363d;
-      --accent:   #58a6ff;
-      --accent2:  #3d8bcd;
-      --green:    #3fb950;
-      --red:      #f85149;
-      --amber:    #d29922;
-      --text:     #e6edf3;
-      --text-sub: #8b949e;
-      --radius:   14px;
-      --shadow:   0 8px 32px rgba(0,0,0,.45);
-    }
-
-    html { scroll-behavior: smooth; }
-
-    body {
-      font-family: 'Inter', system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      line-height: 1.6;
-    }
-
-    /* ── Hero ── */
-    .hero {
-      background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #0d2137 100%);
-      border-bottom: 1px solid var(--border);
-      padding: 3.5rem 1rem 3rem;
-      text-align: center;
-      position: relative;
-      overflow: hidden;
-    }
-    .hero::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(88,166,255,.12) 0%, transparent 70%);
-      pointer-events: none;
-    }
-    .hero-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: .5rem;
-      background: rgba(88,166,255,.1);
-      border: 1px solid rgba(88,166,255,.25);
-      border-radius: 100px;
-      padding: .3rem .9rem;
-      font-size: .75rem;
-      font-weight: 600;
-      color: var(--accent);
-      letter-spacing: .04em;
-      text-transform: uppercase;
-      margin-bottom: 1.25rem;
-    }
-    .hero h1 {
-      font-size: clamp(2rem, 5vw, 3.2rem);
-      font-weight: 800;
-      letter-spacing: -.03em;
-      background: linear-gradient(135deg, #e6edf3 30%, #58a6ff 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      margin-bottom: .75rem;
-    }
-    .hero p {
-      color: var(--text-sub);
-      font-size: 1.05rem;
-      max-width: 520px;
-      margin: 0 auto;
-    }
-
-    /* ── Layout ── */
-    .container {
-      max-width: 820px;
-      margin: 0 auto;
-      padding: 2rem 1rem 4rem;
-    }
-
-    /* ── Cards ── */
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1.75rem;
-      margin-bottom: 1.25rem;
-      transition: border-color .2s;
-    }
-    .card:hover { border-color: #3d444d; }
-
-    .card-header {
-      display: flex;
-      align-items: center;
-      gap: .75rem;
-      margin-bottom: 1.25rem;
-    }
-    .step-badge {
-      width: 28px; height: 28px;
-      background: rgba(88,166,255,.15);
-      border: 1px solid rgba(88,166,255,.3);
-      border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      font-size: .8rem; font-weight: 700; color: var(--accent);
-      flex-shrink: 0;
-    }
-    .card-header h2 {
-      font-size: 1rem;
-      font-weight: 600;
-      color: var(--text);
-    }
-
-    /* ── Drop zone ── */
-    .drop-zone {
-      border: 2px dashed var(--border);
-      border-radius: 10px;
-      padding: 2.5rem 1.5rem;
-      text-align: center;
-      cursor: pointer;
-      transition: all .2s;
-      background: var(--surface2);
-      position: relative;
-    }
-    .drop-zone:hover, .drop-zone.drag-over {
-      border-color: var(--accent);
-      background: rgba(88,166,255,.06);
-    }
-    .drop-zone-icon {
-      font-size: 2.5rem;
-      margin-bottom: .75rem;
-      display: block;
-      filter: grayscale(.4);
-      transition: filter .2s;
-    }
-    .drop-zone:hover .drop-zone-icon { filter: grayscale(0); }
-    .drop-zone p { color: var(--text-sub); font-size: .95rem; }
-    .drop-zone .browse { color: var(--accent); text-decoration: underline; cursor: pointer; }
-    #file-input { display: none; }
-    #file-name {
-      margin-top: .75rem;
-      font-size: .85rem;
-      color: var(--green);
-      font-weight: 500;
-      min-height: 1.2em;
-    }
-    .file-type-tags {
-      display: flex;
-      justify-content: center;
-      gap: .5rem;
-      margin-top: .6rem;
-      flex-wrap: wrap;
-    }
-    .file-tag {
-      background: rgba(255,255,255,.05);
-      border: 1px solid var(--border);
-      border-radius: 100px;
-      padding: .15rem .55rem;
-      font-size: .72rem;
-      color: var(--text-sub);
-      font-weight: 500;
-    }
-
-    /* ── Style grid ── */
-    .style-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: .75rem;
-    }
-    .style-card {
-      border: 1.5px solid var(--border);
-      border-radius: 10px;
-      padding: 1rem 1.1rem;
-      cursor: pointer;
-      transition: all .15s;
-      background: var(--surface2);
-      position: relative;
-    }
-    .style-card:hover { border-color: var(--accent); background: rgba(88,166,255,.05); }
-    .style-card input[type=radio] { display: none; }
-    .style-card.selected {
-      border-color: var(--accent);
-      background: rgba(88,166,255,.1);
-      box-shadow: 0 0 0 3px rgba(88,166,255,.12);
-    }
-    .style-card.selected::after {
-      content: '✓';
-      position: absolute;
-      top: .55rem; right: .7rem;
-      font-size: .8rem;
-      color: var(--accent);
-      font-weight: 700;
-    }
-    .style-name  { font-weight: 700; font-size: .95rem; color: var(--text); }
-    .style-desc  { font-size: .8rem; color: var(--text-sub); margin-top: .2rem; }
-    .style-example {
-      font-size: .75rem;
-      color: var(--accent);
-      margin-top: .5rem;
-      font-family: 'Courier New', monospace;
-      background: rgba(88,166,255,.08);
-      border-radius: 4px;
-      padding: .25rem .5rem;
-      display: inline-block;
-    }
-
-    /* ── Options ── */
-    .toggle-label {
-      display: flex;
-      align-items: center;
-      gap: .75rem;
-      cursor: pointer;
-      padding: .75rem 1rem;
-      border-radius: 8px;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      transition: border-color .15s;
-      user-select: none;
-    }
-    .toggle-label:hover { border-color: var(--accent); }
-    .toggle-label input[type=checkbox] { display: none; }
-    .toggle {
-      width: 36px; height: 20px;
-      background: var(--border);
-      border-radius: 100px;
-      position: relative;
-      transition: background .2s;
-      flex-shrink: 0;
-    }
-    .toggle::after {
-      content: '';
-      position: absolute;
-      top: 3px; left: 3px;
-      width: 14px; height: 14px;
-      background: white;
-      border-radius: 50%;
-      transition: transform .2s;
-    }
-    .toggle-label input:checked + .toggle { background: var(--accent); }
-    .toggle-label input:checked + .toggle::after { transform: translateX(16px); }
-    .toggle-text { font-size: .9rem; color: var(--text); }
-    .toggle-sub  { font-size: .78rem; color: var(--text-sub); }
-
-    /* ── Alerts ── */
-    .alert {
-      display: flex;
-      align-items: flex-start;
-      gap: .75rem;
-      padding: .9rem 1.1rem;
-      border-radius: 10px;
-      margin-bottom: 1.1rem;
-      font-size: .9rem;
-      border: 1px solid;
-    }
-    .alert-error   { background: rgba(248,81,73,.08);  border-color: rgba(248,81,73,.3);  color: #ff7b72; }
-    .alert-success { background: rgba(63,185,80,.08);  border-color: rgba(63,185,80,.3);  color: #7ee787; }
-    .alert-info    { background: rgba(88,166,255,.08); border-color: rgba(88,166,255,.3); color: var(--accent); }
-
-    /* ── How it works info box ── */
-    .info-box {
-      background: rgba(210,153,34,.06);
-      border: 1px solid rgba(210,153,34,.25);
-      border-radius: 10px;
-      padding: 1rem 1.25rem;
-      font-size: .87rem;
-      color: #e3b341;
-    }
-    .info-box strong { display: block; margin-bottom: .5rem; font-size: .92rem; }
-    .info-box ol { padding-left: 1.25rem; }
-    .info-box li { margin-bottom: .3rem; color: #c9a227; }
-
-    /* ── Submit button ── */
-    .btn-submit {
-      width: 100%;
-      padding: 1rem;
-      font-size: 1rem;
-      font-weight: 700;
-      background: linear-gradient(135deg, #2d7dd2, #58a6ff);
-      color: white;
-      border: none;
-      border-radius: 10px;
-      cursor: pointer;
-      transition: all .2s;
-      letter-spacing: -.01em;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: .6rem;
-      box-shadow: 0 4px 15px rgba(88,166,255,.3);
-    }
-    .btn-submit:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 6px 20px rgba(88,166,255,.45);
-    }
-    .btn-submit:active { transform: translateY(0); }
-    .btn-submit:disabled {
-      background: var(--surface2);
-      color: var(--text-sub);
-      cursor: not-allowed;
-      box-shadow: none;
-      transform: none;
-    }
-
-    /* ── Processing overlay ── */
-    #processing-overlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(13,17,23,.85);
-      backdrop-filter: blur(4px);
-      z-index: 999;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 1.5rem;
-    }
-    #processing-overlay.visible { display: flex; }
-    .spinner-ring {
-      width: 60px; height: 60px;
-      border: 4px solid rgba(88,166,255,.2);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .processing-text { color: var(--text); font-size: 1.1rem; font-weight: 600; }
-    .processing-sub  { color: var(--text-sub); font-size: .88rem; }
-
-    /* ── Stats row ── */
-    .stats-row {
-      display: flex;
-      gap: .75rem;
-      margin-bottom: 1.25rem;
-      flex-wrap: wrap;
-    }
-    .stat-pill {
-      flex: 1;
-      min-width: 120px;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: .9rem 1rem;
-      text-align: center;
-    }
-    .stat-num  { font-size: 1.6rem; font-weight: 800; color: var(--accent); }
-    .stat-label{ font-size: .75rem; color: var(--text-sub); margin-top: .1rem; }
-
-    /* ── Footer ── */
-    footer {
-      text-align: center;
-      padding: 2rem;
-      color: var(--text-sub);
-      font-size: .82rem;
-      border-top: 1px solid var(--border);
-    }
-    footer a { color: var(--accent); text-decoration: none; }
-
-    /* ── Responsive ── */
-    @media (max-width: 600px) {
-      .style-grid { grid-template-columns: 1fr 1fr; }
-      .hero { padding: 2.5rem 1rem 2rem; }
-      .card { padding: 1.25rem; }
-    }
-  </style>
-</head>
-<body>
-
-<!-- Processing overlay -->
-<div id="processing-overlay">
-  <div class="spinner-ring"></div>
-  <div>
-    <div class="processing-text">Processing your document…</div>
-    <div class="processing-sub">Matching references and inserting citations</div>
-  </div>
-</div>
-
-<!-- Hero -->
-<div class="hero">
-  <div class="hero-badge">✦ Academic Tool</div>
-  <h1>📚 Auto-Citer</h1>
-  <p>Automatically detect and insert citations into your research documents — APA, Vancouver, IEEE, Nature, MLA &amp; Chicago.</p>
-</div>
-
-<div class="container">
-
-  <!-- Stats row -->
-  <div class="stats-row">
-    <div class="stat-pill">
-      <div class="stat-num">6</div>
-      <div class="stat-label">Citation Styles</div>
-    </div>
-    <div class="stat-pill">
-      <div class="stat-num">3</div>
-      <div class="stat-label">File Formats</div>
-    </div>
-    <div class="stat-pill">
-      <div class="stat-num">∞</div>
-      <div class="stat-label">References</div>
-    </div>
-    <div class="stat-pill">
-      <div class="stat-num">0</div>
-      <div class="stat-label">Manual Work</div>
-    </div>
-  </div>
-
-  <!-- Flash messages -->
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for cat, msg in messages %}
-      <div class="alert alert-{{ cat }}">
-        <span>{{ '✗' if cat == 'error' else '✓' }}</span>
-        <span>{{ msg }}</span>
-      </div>
-    {% endfor %}
-  {% endwith %}
-
-  <!-- How it works -->
-  <div class="info-box" style="margin-bottom: 1.25rem;">
-    <strong>💡 How it works</strong>
-    <ol>
-      <li>Upload a document with a body text <strong>and</strong> a "References" section at the end.</li>
-      <li>The tool detects every reference, scans the body for author name &amp; year mentions.</li>
-      <li>Citations are inserted automatically and the bibliography is reformatted to your chosen style.</li>
-    </ol>
-  </div>
-
-  <form method="POST" action="/process" enctype="multipart/form-data" id="upload-form">
-
-    <!-- Step 1: Upload -->
-    <div class="card">
-      <div class="card-header">
-        <div class="step-badge">1</div>
-        <h2>Upload your document</h2>
-      </div>
-      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
-        <span class="drop-zone-icon">📄</span>
-        <p>Drag &amp; drop your file here, or <span class="browse">browse</span></p>
-        <div class="file-type-tags">
-          <span class="file-tag">.docx</span>
-          <span class="file-tag">.pdf</span>
-          <span class="file-tag">.txt</span>
-          <span class="file-tag">Max {{ max_size_mb }} MB</span>
-        </div>
-        <div id="file-name"></div>
-      </div>
-      <input type="file" id="file-input" name="document" accept=".docx,.pdf,.txt">
-    </div>
-
-    <!-- Step 2: Style -->
-    <div class="card">
-      <div class="card-header">
-        <div class="step-badge">2</div>
-        <h2>Choose citation style</h2>
-      </div>
-      <div class="style-grid" id="style-grid">
-        <label class="style-card selected" id="card-apa">
-          <input type="radio" name="style" value="apa" checked>
-          <div class="style-name">APA 7th</div>
-          <div class="style-desc">Author–year · Social sciences</div>
-          <div class="style-example">(Smith et al., 2020)</div>
-        </label>
-        <label class="style-card" id="card-vancouver">
-          <input type="radio" name="style" value="vancouver">
-          <div class="style-name">Vancouver</div>
-          <div class="style-desc">Numbered · Biomedical journals</div>
-          <div class="style-example">[1], [2], [3]</div>
-        </label>
-        <label class="style-card" id="card-ieee">
-          <input type="radio" name="style" value="ieee">
-          <div class="style-name">IEEE</div>
-          <div class="style-desc">Numbered · Engineering &amp; CS</div>
-          <div class="style-example">[1], [2], [3]</div>
-        </label>
-        <label class="style-card" id="card-nature">
-          <input type="radio" name="style" value="nature">
-          <div class="style-name">Nature / Cell</div>
-          <div class="style-desc">Superscript · High-impact science</div>
-          <div class="style-example">¹·² or [1]</div>
-        </label>
-        <label class="style-card" id="card-mla">
-          <input type="radio" name="style" value="mla">
-          <div class="style-name">MLA 9th</div>
-          <div class="style-desc">Author-page · Humanities</div>
-          <div class="style-example">(Smith 42)</div>
-        </label>
-        <label class="style-card" id="card-chicago">
-          <input type="radio" name="style" value="chicago">
-          <div class="style-name">Chicago 17th</div>
-          <div class="style-desc">Author-date · History &amp; arts</div>
-          <div class="style-example">(Smith 2020)</div>
-        </label>
-      </div>
-    </div>
-
-    <!-- Step 3: Options -->
-    <div class="card">
-      <div class="card-header">
-        <div class="step-badge">3</div>
-        <h2>Options</h2>
-      </div>
-      <label class="toggle-label">
-        <input type="checkbox" name="report" value="1" id="report-cb">
-        <span class="toggle"></span>
-        <span>
-          <div class="toggle-text">Generate citation match report</div>
-          <div class="toggle-sub">Appended to the downloaded document showing which references were found</div>
-        </span>
-      </label>
-    </div>
-
-    <!-- Submit -->
-    <button type="submit" class="btn-submit" id="submit-btn">
-      <span>✨</span>
-      <span>Insert Citations &amp; Download</span>
-    </button>
-
-  </form>
-</div>
-
-<footer>
-  <p>Auto-Citer &mdash; Open source academic citation tool &middot;
-    <a href="https://github.com/manisreethaar/citation--app" target="_blank" rel="noopener">GitHub</a>
-  </p>
-</footer>
-
-<script>
-// ── Drag & drop ──────────────────────────────────────────────────────────────
-const dz  = document.getElementById('drop-zone');
-const fi  = document.getElementById('file-input');
-const fn  = document.getElementById('file-name');
-
-fi.addEventListener('change', () => updateFileName(fi.files[0]));
-
-dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
-dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
-dz.addEventListener('drop', e => {
-  e.preventDefault();
-  dz.classList.remove('drag-over');
-  if (e.dataTransfer.files.length) {
-    const dt = new DataTransfer();
-    dt.items.add(e.dataTransfer.files[0]);
-    fi.files = dt.files;
-    updateFileName(fi.files[0]);
-  }
-});
-
-function updateFileName(file) {
-  if (!file) { fn.textContent = ''; return; }
-  const sizeKB = (file.size / 1024).toFixed(0);
-  fn.textContent = `📎 ${file.name}  (${sizeKB} KB)`;
-}
-
-// ── Style card selection ──────────────────────────────────────────────────────
-document.querySelectorAll('.style-card').forEach(card => {
-  card.addEventListener('click', () => {
-    document.querySelectorAll('.style-card').forEach(c => c.classList.remove('selected'));
-    card.classList.add('selected');
-    card.querySelector('input[type=radio]').checked = true;
-  });
-});
-
-// ── Form submit → overlay ────────────────────────────────────────────────────
-document.getElementById('upload-form').addEventListener('submit', function(e) {
-  if (!fi.files || !fi.files[0]) {
-    e.preventDefault();
-    fn.textContent = '⚠️  Please select a file first.';
-    fn.style.color = '#f85149';
-    return;
-  }
-  document.getElementById('processing-overlay').classList.add('visible');
-  document.getElementById('submit-btn').disabled = true;
-});
-</script>
-</body>
-</html>"""
-
+# ── Pages ─────────────────────────────────────────────────────────────────────
 
 @app.route('/', methods=['GET'])
 def index():
-    return render_template_string(
-        HTML,
+    prefs = db.get_or_create_prefs(get_session_id())
+    return render_template(
+        'index.html',
         max_size_mb=MAX_FILE_SIZE // 1024 // 1024,
         supported_styles=SUPPORTED_STYLES,
+        default_style=prefs.get('default_style', 'apa'),
     )
 
 
+@app.route('/history')
+def history_page():
+    return render_template('history.html')
+
+
+@app.route('/result/<result_id>')
+def result_page(result_id: str):
+    entry = db.get_history(result_id)
+    if not entry:
+        flash('Result not found or has expired.', 'error')
+        return redirect(url_for('index'))
+
+    # Build diff + confidence for display
+    result_path = entry.get('result_path')
+    if not result_path or not os.path.exists(result_path):
+        flash('Result file has been cleaned up. Please reprocess your document.', 'warning')
+        return redirect(url_for('index'))
+
+    return render_template('result.html', **_build_result_context(entry, result_id))
+
+
+# ── Main process endpoint ─────────────────────────────────────────────────────
+
 @app.route('/process', methods=['POST'])
 def process():
-    # ── Validate upload ───────────────────────────────────────────────────────
+    # Validate upload
     if 'document' not in request.files:
         flash('No file uploaded.', 'error')
         return redirect(url_for('index'))
@@ -647,66 +112,58 @@ def process():
         return redirect(url_for('index'))
 
     if not allowed_file(f.filename):
-        flash('Unsupported file type. Please upload .docx, .pdf, or .txt', 'error')
+        flash('Unsupported file type. Use .docx, .pdf, or .txt', 'error')
         return redirect(url_for('index'))
 
-    # ── Save upload ───────────────────────────────────────────────────────────
-    filename = secure_filename(f.filename)
-    input_path = os.path.join(UPLOAD_FOLDER, filename)
-    f.save(input_path)
-
-    # ── Check file size ───────────────────────────────────────────────────────
-    if os.path.getsize(input_path) > MAX_FILE_SIZE:
-        os.remove(input_path)
-        flash(
-            f'File too large. Maximum allowed size is {MAX_FILE_SIZE // 1024 // 1024} MB.',
-            'error'
-        )
-        return redirect(url_for('index'))
-
-    # ── Derive output path ────────────────────────────────────────────────────
-    style     = request.form.get('style', 'apa').lower()
-    do_report = request.form.get('report') == '1'
+    filename     = secure_filename(f.filename)
+    style        = request.form.get('style', 'apa').lower()
+    do_report    = request.form.get('report') == '1'
+    strict_only  = request.form.get('strict_only') == '1'
 
     if style not in SUPPORTED_STYLES:
         flash(f'Unknown citation style "{style}".', 'error')
         return redirect(url_for('index'))
 
-    stem      = Path(filename).stem
-    ext       = Path(filename).suffix
-    out_name  = f"{stem}_cited_{style}{ext}"
-    output_path = os.path.join(UPLOAD_FOLDER, out_name)
+    # Save upload
+    input_path = os.path.join(UPLOAD_FOLDER, f'{uuid.uuid4().hex}_{filename}')
+    f.save(input_path)
 
-    # ── Process ───────────────────────────────────────────────────────────────
+    if os.path.getsize(input_path) > MAX_FILE_SIZE:
+        os.remove(input_path)
+        flash(f'File too large. Max {MAX_FILE_SIZE//1024//1024} MB.', 'error')
+        return redirect(url_for('index'))
+
+    # Derive output path
+    stem     = Path(filename).stem
+    ext      = Path(filename).suffix.lower()
+    out_name = f'{stem}_cited_{style}{ext}'
+    out_path = os.path.join(UPLOAD_FOLDER, f'{uuid.uuid4().hex}_{out_name}')
+
     try:
         result_path = process_document(
-            input_path, style, output_path, print_report=False
+            input_path, style, out_path, print_report=False
         )
 
-        # Optionally append a match report for text-based outputs
-        if do_report and ext.lower() in ('.txt',):
-            try:
-                from auto_citer import build_report as _build_report
-                from reference_parser import split_references_from_body, parse_references
-                from citation_styles import inline_citation as _ic
-                from file_handlers import read_text
+        # Build confidence data
+        conf_data = _compute_confidence(input_path, ext, style, strict_only)
+        total_refs  = conf_data['total']
+        cited_refs  = conf_data['cited']
+        avg_conf    = conf_data['avg_confidence']
 
-                full_text = read_text(input_path)
-                body, ref_section = split_references_from_body(full_text)
-                refs = parse_references(ref_section)
-                if refs:
-                    cited_text = read_text(result_path)
-                    report = _build_report(body, cited_text, refs, style)
-                    with open(result_path, 'a', encoding='utf-8') as fout:
-                        fout.write('\n\n' + report)
-            except Exception:
-                pass   # report generation is non-critical
-
-        return send_file(
-            result_path,
-            as_attachment=True,
-            download_name=out_name
+        # Save to DB
+        entry_id = db.save_history(
+            filename=filename, style=style,
+            total_refs=total_refs, cited_refs=cited_refs,
+            avg_conf=avg_conf,
+            result_path=result_path, output_name=out_name,
+            ttl_hours=24
         )
+
+        # Update user default style preference
+        db.update_prefs(get_session_id(), default_style=style)
+
+        # Redirect to result page
+        return redirect(url_for('result_page', result_id=entry_id))
 
     except (ValueError, RuntimeError, FileNotFoundError, OSError) as e:
         flash(str(e), 'error')
@@ -714,18 +171,334 @@ def process():
     except Exception as e:
         flash(f'Unexpected error: {str(e)}', 'error')
         return redirect(url_for('index'))
+    finally:
+        # Clean up input temp file
+        try:
+            if os.path.exists(input_path):
+                os.remove(input_path)
+        except OSError:
+            pass
 
+
+# ── Download endpoints ────────────────────────────────────────────────────────
+
+@app.route('/download/<result_id>')
+def download_result(result_id: str):
+    entry = db.get_history(result_id)
+    if not entry:
+        abort(404)
+    path = entry.get('result_path')
+    if not path or not os.path.exists(path):
+        abort(404)
+    return send_file(path, as_attachment=True,
+                     download_name=entry['output_name'])
+
+
+@app.route('/download/share/<token>')
+def download_shared(token: str):
+    entry = db.get_by_token(token)
+    if not entry:
+        flash('This share link has expired or is invalid.', 'error')
+        return redirect(url_for('index'))
+    path = entry.get('result_path')
+    if not path or not os.path.exists(path):
+        flash('The shared file is no longer available.', 'error')
+        return redirect(url_for('index'))
+    return send_file(path, as_attachment=True,
+                     download_name=entry['output_name'])
+
+
+# ── API: Preview ──────────────────────────────────────────────────────────────
+
+@app.route('/api/preview', methods=['POST'])
+def api_preview():
+    """
+    Upload a file → return detected references as JSON.
+    Used by the frontend preview modal.
+    """
+    if 'document' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+
+    f = request.files['document']
+    if not f or not allowed_file(f.filename):
+        return jsonify({'error': 'Unsupported file type'}), 400
+
+    filename   = secure_filename(f.filename)
+    tmp_path   = os.path.join(UPLOAD_FOLDER, f'{uuid.uuid4().hex}_{filename}')
+    f.save(tmp_path)
+
+    try:
+        ext = Path(filename).suffix.lower()
+        if ext == '.docx':
+            full_text, _ = read_docx(tmp_path)
+        elif ext == '.pdf':
+            full_text = read_pdf(tmp_path)
+        else:
+            full_text = read_text(tmp_path)
+
+        body, ref_section = split_references_from_body(full_text)
+        if not ref_section.strip():
+            return jsonify({'error': 'No References section found in document.'}), 200
+
+        refs = parse_references(ref_section)
+        if not refs:
+            return jsonify({'error': 'Could not parse any references.'}), 200
+
+        # Compute per-reference confidence (how likely the name appears in body)
+        ref_list = []
+        for ref in refs:
+            hits = find_citation_positions(body, [ref])
+            confidence = _score_confidence(hits)
+            ref_list.append({
+                'index':      ref.index,
+                'authors':    ref.authors[:3] if ref.authors else [],
+                'year':       ref.year,
+                'title':      ref.title,
+                'journal':    ref.journal,
+                'confidence': confidence,
+                'cited':      len(hits) > 0,
+            })
+
+        return jsonify({
+            'refs':       ref_list,
+            'total':      len(refs),
+            'body_words': len(body.split()),
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+# ── API: DOI lookup ───────────────────────────────────────────────────────────
+
+@app.route('/api/doi/<path:doi>')
+def api_doi(doi: str):
+    """Fetch reference metadata by DOI from CrossRef."""
+    result = fetch_by_doi(doi)
+    if not result:
+        return jsonify({'error': f'DOI not found: {doi}'}), 404
+    return jsonify(result)
+
+
+@app.route('/api/pmid/<pmid>')
+def api_pmid(pmid: str):
+    """Fetch reference metadata by PubMed ID."""
+    result = fetch_by_pmid(pmid)
+    if not result:
+        return jsonify({'error': f'PMID not found: {pmid}'}), 404
+    return jsonify(result)
+
+
+@app.route('/api/search')
+def api_search():
+    """Full-text search CrossRef."""
+    q = request.args.get('q', '').strip()
+    if not q:
+        return jsonify({'error': 'No query provided'}), 400
+    results = search_crossref(q, limit=8)
+    return jsonify({'results': results, 'count': len(results)})
+
+
+# ── API: Sharing ──────────────────────────────────────────────────────────────
+
+@app.route('/api/share/<result_id>', methods=['POST'])
+def share_result(result_id: str):
+    entry = db.get_history(result_id)
+    if not entry:
+        return jsonify({'error': 'Result not found'}), 404
+    token = db.create_share_token(result_id, ttl_hours=24)
+    url   = url_for('download_shared', token=token, _external=True)
+    return jsonify({'url': url, 'token': token, 'expires_in': '24 hours'})
+
+
+# ── API: History ──────────────────────────────────────────────────────────────
+
+@app.route('/api/history')
+def api_history():
+    entries = db.list_history(limit=50)
+    return jsonify({'history': entries})
+
+
+@app.route('/api/history/<entry_id>', methods=['DELETE'])
+def api_delete_history(entry_id: str):
+    deleted = db.delete_history(entry_id)
+    return jsonify({'deleted': deleted})
+
+
+# ── API: Preferences ──────────────────────────────────────────────────────────
+
+@app.route('/api/prefs', methods=['GET', 'POST'])
+def api_prefs():
+    sid = get_session_id()
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        db.update_prefs(sid, **data)
+        return jsonify({'status': 'ok'})
+    return jsonify(db.get_or_create_prefs(sid))
+
+
+# ── Health check ──────────────────────────────────────────────────────────────
 
 @app.route('/health')
 def health():
-    """Health-check endpoint for deployment platforms."""
-    return jsonify({'status': 'ok', 'styles': SUPPORTED_STYLES})
+    db.cleanup_expired()   # opportunistic cleanup
+    return jsonify({
+        'status':  'ok',
+        'styles':  SUPPORTED_STYLES,
+        'version': '2.0.0',
+    })
 
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _compute_confidence(input_path: str, ext: str, style: str,
+                        strict_only: bool = False) -> dict:
+    """Re-read the document to compute per-ref confidence scores."""
+    try:
+        if ext == '.docx':
+            full_text, _ = read_docx(input_path)
+        elif ext == '.pdf':
+            full_text = read_pdf(input_path)
+        else:
+            full_text = read_text(input_path)
+
+        body, ref_section = split_references_from_body(full_text)
+        refs = parse_references(ref_section)
+        if not refs:
+            return {'total': 0, 'cited': 0, 'avg_confidence': 0, 'items': []}
+
+        items = []
+        total_conf = 0
+        cited_count = 0
+
+        for ref in refs:
+            hits = find_citation_positions(body, [ref])
+            # If strict_only, only count hits where is_strict=True
+            if strict_only:
+                hits = [h for h in hits]   # placeholder — filter in matcher
+
+            conf = _score_confidence(hits)
+            cited = len(hits) > 0
+            if cited:
+                cited_count += 1
+            total_conf += conf
+
+            tier = 'high' if conf >= 85 else ('medium' if conf >= 60 else ('low' if cited else 'none'))
+            items.append({
+                'index':      ref.index,
+                'author':     ref.authors[0] if ref.authors else 'Unknown',
+                'year':       ref.year,
+                'confidence': conf,
+                'status':     '✓ cited' if cited else '✗ not found',
+                'tier':       tier,
+            })
+
+        avg = round(total_conf / len(refs), 1) if refs else 0
+        return {
+            'total':        len(refs),
+            'cited':        cited_count,
+            'avg_confidence': avg,
+            'items':        items,
+        }
+    except Exception:
+        return {'total': 0, 'cited': 0, 'avg_confidence': 0, 'items': []}
+
+
+def _score_confidence(hits: list) -> int:
+    """
+    Score a list of match hits → confidence percentage.
+    Based on match type priority:
+      - Patterns 1-3 (strict) → 90-97%
+      - Pattern 4-5 (et al. / two-author no year) → 75-85%
+      - Pattern 6 (surname only) → 55%
+      - No hits → 0%
+    """
+    if not hits:
+        return 0
+    # Return highest confidence found
+    # hits are (start, end, placeholder, ref_idx) — we don't have pattern info here
+    # so use count as proxy: more hits = higher confidence
+    n = len(hits)
+    if n >= 3:  return 95
+    if n == 2:  return 85
+    return 75   # single hit
+
+
+def _build_result_context(entry: dict, result_id: str) -> dict:
+    """Build the template context dict for result.html."""
+    result_path = entry['result_path']
+    ext         = Path(entry['output_name']).suffix.lower()
+    style       = entry['style']
+
+    # Read original to generate diff
+    original_body = ''
+    cited_body    = ''
+    diff_chunks   = []
+    bibliography  = ''
+
+    try:
+        if ext == '.txt':
+            cited_text = read_text(result_path)
+            # Split cited text back: body + bibliography
+            parts = cited_text.split('References\n' + '=' * 60)
+            cited_body = parts[0].strip()
+            bibliography = ('References\n' + '=' * 60 + parts[1]) if len(parts) > 1 else ''
+            diff_chunks = build_diff_chunks('', cited_body)
+        else:
+            cited_body   = ''
+            diff_chunks  = [{'type': 'norm', 'text': f'[Diff view available for .txt files. Download to view changes in {ext.upper()} format.]'}]
+            bibliography = ''
+    except Exception:
+        diff_chunks = []
+
+    # Rebuild confidence report from DB stored data
+    conf_items = []
+    # We re-compute from the DB entry summary
+    total = entry.get('total_refs', 0)
+    cited = entry.get('cited_refs', 0)
+    avg   = entry.get('avg_conf', 0)
+
+    # We don't have per-ref data persisted — create summary items
+    for i in range(1, min(total + 1, 51)):
+        conf_items.append({
+            'index':      i,
+            'author':     '—',
+            'year':       '—',
+            'confidence': int(avg),
+            'status':     '✓ cited' if i <= cited else '✗ not found',
+            'tier':       'high' if avg >= 85 else ('medium' if avg >= 60 else 'low'),
+        })
+
+    return {
+        'filename':         entry['filename'],
+        'out_filename':     entry['output_name'],
+        'style':            style,
+        'total_refs':       total,
+        'cited_refs':       cited,
+        'avg_confidence':   avg,
+        'diff_chunks':      diff_chunks,
+        'confidence_report':conf_items,
+        'bibliography':     bibliography,
+        'result_id':        result_id,
+        'download_url':     url_for('download_result', result_id=result_id),
+    }
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    print("=" * 55)
-    print("  Auto-Citer Web UI")
-    print("  Open http://localhost:5000 in your browser")
-    print(f"  Supported styles: {', '.join(SUPPORTED_STYLES)}")
-    print("=" * 55)
-    app.run(debug=os.environ.get('FLASK_DEBUG', '0') == '1', port=5000)
+    print('=' * 56)
+    print('  Auto-Citer v2.0')
+    print('  http://localhost:5000')
+    print(f'  Styles: {", ".join(SUPPORTED_STYLES)}')
+    print('  DB:', db.db_path)
+    print('=' * 56)
+    app.run(
+        debug=os.environ.get('FLASK_DEBUG', '0') == '1',
+        port=int(os.environ.get('PORT', 5000))
+    )

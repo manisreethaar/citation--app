@@ -238,14 +238,37 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderPreviewModal(data) {
     const list = document.getElementById('modal-ref-list');
     if (!list || !data.refs) return;
-    list.innerHTML = data.refs.map(ref => `
+
+    // Detection mode banner
+    const det = data.detection || {};
+    const modeInfo = {
+      numbered:    { icon: '🔢', label: 'Numbered citations detected',  cls: 'mode-numbered',    text: 'Your document already has [1] [2] style markers — we will reformat them to your chosen style.' },
+      superscript: { icon: '¹²', label: 'Superscript citations detected', cls: 'mode-numbered',   text: 'Superscript markers (¹²³) found — bibliography will be reformatted.' },
+      author_year: { icon: '👤', label: 'Author-year citations detected', cls: 'mode-author-year', text: 'Your document already has (Author, Year) markers — we will reformat them.' },
+      none:        { icon: '✨', label: 'No existing citations',          cls: 'mode-none',        text: 'No inline citations found — will insert from author+year matching.' },
+    };
+    const mi = modeInfo[det.mode] || modeInfo.none;
+    const banner = `
+      <div class="detection-banner ${mi.cls}">
+        <span class="det-icon">${mi.icon}</span>
+        <div>
+          <div class="det-label">${mi.label}</div>
+          <div class="det-desc">${det.description || mi.text}</div>
+          ${det.examples?.length ? `<div class="det-examples">e.g. ${det.examples.slice(0,3).map(e=>`<code>${e}</code>`).join(' ')}</div>` : ''}
+          ${det.mode === 'numbered' ? `<div class="det-tip">💡 Tip: Switch style to <strong>Vancouver</strong> or <strong>IEEE</strong> to keep numbered format</div>` : ''}
+        </div>
+      </div>`;
+
+    list.innerHTML = banner + data.refs.map(ref => `
       <div class="modal-ref-item">
         <div class="modal-ref-idx">[${ref.index}]</div>
         <div class="modal-ref-body">
           <div class="modal-ref-author">${ref.authors?.[0] || 'Unknown'}${ref.authors?.length > 1 ? ' <em>et al.</em>' : ''}</div>
-          <div class="modal-ref-year">${ref.year || 'n.d.'}${ref.title ? ' — ' + truncate(ref.title, 60) : ''}</div>
+          <div class="modal-ref-year">${ref.year || 'n.d.'}${ref.title ? ' — ' + truncate(ref.title, 60) : ''}
+            ${ref.ref_type && ref.ref_type !== 'article' ? `<span class="ref-type-badge">${ref.ref_type}</span>` : ''}
+          </div>
         </div>
-        <span class="ref-badge badge-${confTier(ref.confidence)}">${ref.confidence ?? '?'}%</span>
+        <span class="ref-badge badge-${confTier(ref.confidence)}">${ref.confidence > 0 ? ref.confidence + '%' : ref.cited ? '✓' : '?'}</span>
       </div>`).join('');
   }
 
@@ -256,12 +279,24 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!panel || !data.refs) return;
     panel.style.display = 'block';
     if (badge) badge.textContent = data.refs.length;
+
+    // Show detection mode in side panel
+    const det = data.detection || {};
+    const modeColors = { numbered: 'var(--accent)', author_year: '#a371f7', none: 'var(--green)', superscript: 'var(--amber)' };
+    const modeLabels = { numbered: '🔢 Numbered', author_year: '👤 Author-year', none: '✨ No citations', superscript: '¹² Superscript' };
+    const modeEl = document.getElementById('detected-mode-badge');
+    if (modeEl) {
+      modeEl.textContent = modeLabels[det.mode] || '? Unknown';
+      modeEl.style.background = modeColors[det.mode] || 'var(--surface3)';
+      modeEl.style.display = 'inline-block';
+    }
+
     if (list) {
       list.innerHTML = data.refs.slice(0, 8).map(ref => `
         <div class="ref-preview-item">
           <span class="ref-preview-idx">[${ref.index}]</span>
           <span class="ref-preview-text">${ref.authors?.[0] || 'Unknown'} (${ref.year || 'n.d.'})</span>
-          <span class="ref-badge badge-${confTier(ref.confidence)}">${confTier(ref.confidence)}</span>
+          <span class="ref-badge badge-${confTier(ref.confidence)}">${ref.cited ? (ref.confidence > 0 ? ref.confidence+'%' : '✓') : '?'}</span>
         </div>`).join('');
       if (data.refs.length > 8) list.innerHTML += `<div class="ref-preview-item" style="color:var(--text-muted);justify-content:center">+${data.refs.length - 8} more…</div>`;
     }

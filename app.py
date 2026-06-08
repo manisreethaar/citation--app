@@ -254,7 +254,7 @@ def download_shared(token: str):
 @app.route('/api/preview', methods=['POST'])
 def api_preview():
     """
-    Upload a file → return detected references as JSON.
+    Upload a file → return detected references + citation mode as JSON.
     Used by the frontend preview modal.
     """
     if 'document' not in request.files:
@@ -288,25 +288,49 @@ def api_preview():
         if not refs:
             return jsonify({'error': 'Could not parse any references.'}), 200
 
-        # Compute per-reference confidence (how likely the name appears in body)
+        # Detect existing citation mode
+        from citation_detector import detect_citation_mode, extract_cited_numbers
+        detection = detect_citation_mode(body)
+        cited_nums = set(extract_cited_numbers(body)) if detection['mode'] == 'numbered' else set()
+
+        # Compute per-reference confidence
         ref_list = []
         for ref in refs:
-            hits = find_citation_positions(body, [ref])
-            confidence = _score_confidence(hits)
+            if detection['mode'] == 'numbered':
+                # For numbered docs: confidence = whether [n] exists in body
+                is_cited = ref.index in cited_nums
+                confidence = 95 if is_cited else 0
+            elif detection['mode'] == 'superscript':
+                confidence = 80  # can't easily verify per-ref
+                is_cited   = True
+            else:
+                # Author-year: scan for name+year matches
+                hits = find_citation_positions(body, [ref])
+                confidence = _score_confidence(hits)
+                is_cited   = len(hits) > 0
+
             ref_list.append({
                 'index':      ref.index,
                 'authors':    ref.authors[:3] if ref.authors else [],
                 'year':       ref.year,
                 'title':      ref.title,
                 'journal':    ref.journal,
+                'ref_type':   getattr(ref, 'ref_type', 'article'),
                 'confidence': confidence,
-                'cited':      len(hits) > 0,
+                'cited':      is_cited,
             })
 
         return jsonify({
-            'refs':       ref_list,
-            'total':      len(refs),
-            'body_words': len(body.split()),
+            'refs':           ref_list,
+            'total':          len(refs),
+            'body_words':     len(body.split()),
+            'detection': {
+                'mode':        detection['mode'],
+                'count':       detection['count'],
+                'style_guess': detection['style_guess'],
+                'description': detection['description'],
+                'examples':    detection['examples'][:3],
+            },
         })
 
     except Exception as e:

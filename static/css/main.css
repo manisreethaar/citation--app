@@ -992,3 +992,70 @@ kbd { background:var(--surface3);border:1px solid var(--border2);border-radius:4
   h1,h2,h3 { page-break-after:avoid; }
   @page { margin:2cm; }
 }
+
+/* ── Detection mode banner ────────────────────────────────────── */
+.detection-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: .85rem;
+  padding: 1rem 1.1rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 1rem;
+  border: 1px solid;
+  animation: fadeIn .25s ease;
+}
+.detection-banner.mode-numbered {
+  background: rgba(88,166,255,.08);
+  border-color: rgba(88,166,255,.25);
+}
+.detection-banner.mode-author-year {
+  background: rgba(163,113,247,.08);
+  border-color: rgba(163,113,247,.25);
+}
+.detection-banner.mode-none {
+  background: rgba(63,185,80,.07);
+  border-color: rgba(63,185,80,.2);
+}
+.det-icon { font-size: 1.4rem; flex-shrink: 0; margin-top: .1rem; }
+.det-label { font-weight: 700; font-size: .88rem; color: var(--text); margin-bottom: .2rem; }
+.det-desc  { font-size: .8rem; color: var(--text-sub); }
+.det-examples { margin-top: .35rem; font-size: .77rem; }
+.det-examples code {
+  background: var(--surface3);
+  border-radius: 3px;
+  padding: .1rem .3rem;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--accent);
+  margin-right: .25rem;
+}
+.det-tip {
+  margin-top: .4rem;
+  font-size: .77rem;
+  color: var(--amber);
+}
+
+/* ── Mode badge in side panel ─────────────────────────────────── */
+#detected-mode-badge {
+  display: none;
+  font-size: .72rem;
+  font-weight: 700;
+  color: white;
+  border-radius: 100px;
+  padding: .2rem .65rem;
+  margin-left: .5rem;
+  vertical-align: middle;
+}
+
+/* ── Ref type badge ───────────────────────────────────────────── */
+.ref-type-badge {
+  display: inline-block;
+  font-size: .65rem;
+  font-weight: 700;
+  border-radius: 3px;
+  padding: .08rem .35rem;
+  background: var(--amber-bg);
+  color: var(--amber);
+  margin-left: .35rem;
+  vertical-align: middle;
+  text-transform: uppercase;
+}

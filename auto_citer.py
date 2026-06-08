@@ -24,7 +24,8 @@ from pathlib import Path
 
 from reference_parser import split_references_from_body, parse_references
 from citation_styles import inline_citation, format_bibliography
-from matcher import insert_citations
+from matcher import insert_citations, smart_insert_citations
+from citation_detector import detect_citation_mode
 from file_handlers import (
     read_docx, write_docx, read_pdf, write_pdf_txt,
     read_text, write_text, find_refs_start_paragraph
@@ -120,7 +121,11 @@ def process_document(input_path: str, style: str = 'apa',
             "Ensure your document ends with a 'References' (or 'Bibliography') heading."
         )
 
-    # ── 3. Parse references ──────────────────────────────────────────────────
+    # ── 3. Detect existing citation mode ─────────────────────────────
+    detection = detect_citation_mode(body)
+    print(f"[auto-citer] Citation mode: {detection['mode']} ({detection['count']} markers)")
+
+    # ── 4. Parse references ─────────────────────────────────────────
     refs = parse_references(ref_section)
     print(f"[auto-citer] Found {len(refs)} references.")
 
@@ -130,13 +135,14 @@ def process_document(input_path: str, style: str = 'apa',
             "Check that references are properly formatted."
         )
 
-    # ── 4. Insert citations into body ────────────────────────────────────────
-    cited_body = insert_citations(body, refs, style)
+    # ── 5. Insert / reformat citations ──────────────────────────────
+    cited_body, mode_desc = smart_insert_citations(body, refs, style)
+    print(f"[auto-citer] {mode_desc}")
 
-    # ── 5. Format bibliography ───────────────────────────────────────────────
+    # ── 6. Format bibliography ──────────────────────────────────────
     new_bibliography = format_bibliography(refs, style)
 
-    # ── 6. Write output ──────────────────────────────────────────────────────
+    # ── 7. Write output ─────────────────────────────────────────────
     if ext == '.docx' and doc_obj is not None:
         ref_para_idx = find_refs_start_paragraph(doc_obj, _REF_SECTION_RE)
         write_docx(doc_obj, cited_body, new_bibliography, ref_para_idx, output_path)

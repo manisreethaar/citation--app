@@ -250,14 +250,13 @@
       </div>
     </div>
 
-    <!-- Detected refs panel (appears after preview) -->
     <div class="card info-card" id="preview-panel" style="display:none">
-      <h3>🔍 Detected references <span class="badge" id="ref-count-badge">0</span></h3>
+      <h3>🔍 Detected references <span class="badge" id="ref-count-badge">0</span><span id="detected-mode-badge"></span></h3>
       <div id="ref-preview-list" class="ref-preview-list"></div>
       <div class="confidence-legend">
-        <span class="conf-dot conf-high"></span> High
-        <span class="conf-dot conf-medium"></span> Medium
-        <span class="conf-dot conf-low"></span> Low
+        <span class="conf-dot conf-high"></span> High (≥85%)
+        <span class="conf-dot conf-medium"></span> Medium (60–84%)
+        <span class="conf-dot conf-low"></span> Low (&lt;60%)
       </div>
     </div>
   </div>

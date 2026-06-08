@@ -242,4 +242,10 @@ def web_check(
                             page_title=title,
                             snippet=snippet,
                             jaccard=j_page,
-                          
+                            rare_phrases=rp_page,
+                            query_used=query,
+                        ))
+                        break
+
+    print(f"[web_checker] Done. {queries_used} queries used, {len(matches)} web matches found.")
+    return matches

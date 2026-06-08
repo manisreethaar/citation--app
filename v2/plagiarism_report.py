@@ -134,4 +134,7 @@ def build_report(
 def print_report(
     result: PlagiarismResult,
     web_matches: List[WebMatch],
-    doc_name: str = "Up
+    doc_name: str = "Uploaded document",
+    source_names: Optional[List[str]] = None,
+):
+    print(build_report(result, web_matches, doc_name, source_names))

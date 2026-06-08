@@ -637,6 +637,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const pct = data.overall_percent || 0;
     const tier = pct >= 65 ? 'high' : (pct >= 40 ? 'medium' : 'low');
     const locations = data.locations || [];
+    const signals = data.signals || {};
+    const paragraphs = data.paragraphs || [];
     aiLangResult.innerHTML = `
       <div class="ai-lang-score-card ai-lang-${tier}">
         <div class="ai-lang-score">
@@ -648,14 +650,45 @@ document.addEventListener('DOMContentLoaded', () => {
           <small>${data.ai_like_words || 0} weighted AI-like words across ${data.total_words || 0} total words</small>
         </div>
       </div>
+      <div class="ai-lang-note">${escapeHtml(data.confidence_note || '')}</div>
+      <div class="ai-lang-signals">
+        ${Object.entries(signals).map(([name, value]) => renderAiLanguageSignal(name, value)).join('')}
+      </div>
+      ${paragraphs.length ? `
+      <div class="ai-lang-paragraphs">
+        <div class="section-label">Highest-risk paragraphs <span class="badge">${paragraphs.length}</span></div>
+        ${paragraphs.slice(0, 8).map(renderAiLanguageParagraph).join('')}
+      </div>` : ''}
       <div class="ai-lang-locations">
         <div class="section-label">Flagged locations <span class="badge">${locations.length}</span></div>
         ${locations.length ? locations.map(renderAiLanguageLocation).join('') : '<div class="fetch-empty">No strong AI-language locations found.</div>'}
       </div>`;
   }
 
+  function renderAiLanguageSignal(name, value) {
+    const label = name.replace(/_/g, ' ');
+    return `
+      <div class="ai-lang-signal">
+        <div class="ai-lang-signal-top"><span>${escapeHtml(label)}</span><strong>${value}%</strong></div>
+        <div class="ai-lang-meter"><span style="width:${Math.max(0, Math.min(100, value))}%"></span></div>
+      </div>`;
+  }
+
+  function renderAiLanguageParagraph(item) {
+    return `
+      <div class="ai-lang-para ai-lang-${item.tier || 'low'}">
+        <strong>${item.percent}%</strong>
+        <span>Paragraph ${item.paragraph}</span>
+        <small>${item.word_count} words, ${item.flagged_sentences} flagged sentence(s)</small>
+      </div>`;
+  }
+
   function renderAiLanguageLocation(item) {
     const reasons = (item.reasons || []).map(r => `<span class="ai-lang-reason">${escapeHtml(r)}</span>`).join('');
+    const evidence = item.evidence || {};
+    const evidenceHtml = Object.entries(evidence).map(([k, v]) =>
+      `<span class="ai-lang-evidence">${escapeHtml(k.replace(/_/g, ' '))}: ${v}%</span>`
+    ).join('');
     return `
       <div class="ai-lang-location ai-lang-${item.tier || 'low'}">
         <div class="ai-lang-location-head">
@@ -663,6 +696,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <span>Line ${item.line}, paragraph ${item.paragraph}</span>
         </div>
         <p>${escapeHtml(item.text)}</p>
+        <div class="ai-lang-evidence-row">${evidenceHtml}</div>
         <div class="ai-lang-reasons">${reasons}</div>
       </div>`;
   }

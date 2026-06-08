@@ -19,7 +19,7 @@ def read_docx(path: str) -> Tuple[str, object]:
     try:
         from docx import Document
     except ImportError:
-        sys.exit("Missing dependency: pip install python-docx")
+        raise RuntimeError("Missing dependency: pip install python-docx")
 
     doc = Document(path)
     paragraphs_text = []
@@ -75,7 +75,10 @@ def read_pdf(path: str) -> str:
     try:
         import fitz  # PyMuPDF
     except ImportError:
-        sys.exit("Missing dependency: pip install PyMuPDF")
+        raise RuntimeError(
+            "PyMuPDF is not installed. For PDF support run: pip install PyMuPDF. "
+            "Alternatively, convert your PDF to .txt and upload that instead."
+        )
 
     doc = fitz.open(path)
     pages = []

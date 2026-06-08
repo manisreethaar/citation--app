@@ -27,16 +27,21 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from auto_citer   import process_document, SUPPORTED_STYLES, MAX_FILE_SIZE
-from auto_citer   import build_report as _build_report_txt
-from reference_parser  import split_references_from_body, parse_references
-from citation_styles   import inline_citation, format_bibliography
-from matcher           import find_citation_positions, insert_citations
-from file_handlers     import read_text, read_pdf, read_docx
-from diff_engine       import build_diff_chunks
-from database          import Database
-from doi_fetcher       import fetch_by_doi, fetch_by_pmid, search_crossref
+from auto_citer          import process_document, SUPPORTED_STYLES, MAX_FILE_SIZE
+from reference_parser    import split_references_from_body, parse_references
+from citation_styles     import inline_citation, format_bibliography
+from matcher             import find_citation_positions, insert_citations
+from file_handlers       import read_text, read_docx, find_refs_start_paragraph
+from diff_engine         import build_diff_chunks
+from database            import Database
+from doi_fetcher         import fetch_by_doi, fetch_by_pmid, search_crossref
 
+# Optional: PyMuPDF for PDF support
+try:
+    from file_handlers import read_pdf
+    _PDF_SUPPORTED = True
+except Exception:
+    _PDF_SUPPORTED = False
 
 # ── App init ──────────────────────────────────────────────────────────────────
 
@@ -44,17 +49,47 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
-UPLOAD_FOLDER     = tempfile.mkdtemp(prefix='auto_citer_')
+# Use /tmp on Vercel (read-only filesystem except /tmp)
+_IS_VERCEL = bool(os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'))
+_TMP_BASE  = '/tmp' if _IS_VERCEL else tempfile.gettempdir()
+
+def _get_upload_folder() -> str:
+    """Lazy-init upload folder so it's created on first request, not at import time."""
+    folder = os.path.join(_TMP_BASE, 'auto_citer_uploads')
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
 ALLOWED_EXTENSIONS = {'docx', 'pdf', 'txt'}
 
-# Init DB
-db = Database()
-db.init()
+# Init DB (safe — won't crash if DB unavailable)
+try:
+    db = Database()
+    db.init()
+    _DB_OK = True
+except Exception as _db_err:
+    print(f'[Warning] DB unavailable: {_db_err}', file=sys.stderr)
+    db = None
+    _DB_OK = False
 
 
 def allowed_file(filename: str) -> bool:
     return ('.' in filename
             and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS)
+
+
+def _upload_folder() -> str:
+    return _get_upload_folder()
+
+
+def _safe_db_call(fn, *args, **kwargs):
+    """Call a DB function safely — returns None if DB unavailable."""
+    if not _DB_OK or db is None:
+        return None
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        print(f'[Warning] DB error: {e}', file=sys.stderr)
+        return None
 
 
 def get_session_id() -> str:
@@ -67,7 +102,7 @@ def get_session_id() -> str:
 
 @app.route('/', methods=['GET'])
 def index():
-    prefs = db.get_or_create_prefs(get_session_id())
+    prefs = _safe_db_call(db.get_or_create_prefs, get_session_id()) or {}
     return render_template(
         'index.html',
         max_size_mb=MAX_FILE_SIZE // 1024 // 1024,
@@ -83,12 +118,11 @@ def history_page():
 
 @app.route('/result/<result_id>')
 def result_page(result_id: str):
-    entry = db.get_history(result_id)
+    entry = _safe_db_call(db.get_history, result_id) if _DB_OK else None
     if not entry:
         flash('Result not found or has expired.', 'error')
         return redirect(url_for('index'))
 
-    # Build diff + confidence for display
     result_path = entry.get('result_path')
     if not result_path or not os.path.exists(result_path):
         flash('Result file has been cleaned up. Please reprocess your document.', 'warning')
@@ -124,8 +158,9 @@ def process():
         flash(f'Unknown citation style "{style}".', 'error')
         return redirect(url_for('index'))
 
-    # Save upload
-    input_path = os.path.join(UPLOAD_FOLDER, f'{uuid.uuid4().hex}_{filename}')
+    # Save upload to /tmp
+    upload_dir = _upload_folder()
+    input_path = os.path.join(upload_dir, f'{uuid.uuid4().hex}_{filename}')
     f.save(input_path)
 
     if os.path.getsize(input_path) > MAX_FILE_SIZE:
@@ -137,7 +172,7 @@ def process():
     stem     = Path(filename).stem
     ext      = Path(filename).suffix.lower()
     out_name = f'{stem}_cited_{style}{ext}'
-    out_path = os.path.join(UPLOAD_FOLDER, f'{uuid.uuid4().hex}_{out_name}')
+    out_path = os.path.join(upload_dir, f'{uuid.uuid4().hex}_{out_name}')
 
     try:
         result_path = process_document(
@@ -151,7 +186,8 @@ def process():
         avg_conf    = conf_data['avg_confidence']
 
         # Save to DB
-        entry_id = db.save_history(
+        entry_id = _safe_db_call(
+            db.save_history,
             filename=filename, style=style,
             total_refs=total_refs, cited_refs=cited_refs,
             avg_conf=avg_conf,
@@ -160,7 +196,11 @@ def process():
         )
 
         # Update user default style preference
-        db.update_prefs(get_session_id(), default_style=style)
+        _safe_db_call(db.update_prefs, get_session_id(), default_style=style)
+
+        # If DB unavailable, fall back to direct download
+        if not entry_id:
+            return send_file(result_path, as_attachment=True, download_name=out_name)
 
         # Redirect to result page
         return redirect(url_for('result_page', result_id=entry_id))
@@ -184,7 +224,7 @@ def process():
 
 @app.route('/download/<result_id>')
 def download_result(result_id: str):
-    entry = db.get_history(result_id)
+    entry = _safe_db_call(db.get_history, result_id) if _DB_OK else None
     if not entry:
         abort(404)
     path = entry.get('result_path')
@@ -196,7 +236,7 @@ def download_result(result_id: str):
 
 @app.route('/download/share/<token>')
 def download_shared(token: str):
-    entry = db.get_by_token(token)
+    entry = _safe_db_call(db.get_by_token, token) if _DB_OK else None
     if not entry:
         flash('This share link has expired or is invalid.', 'error')
         return redirect(url_for('index'))
@@ -224,7 +264,7 @@ def api_preview():
         return jsonify({'error': 'Unsupported file type'}), 400
 
     filename   = secure_filename(f.filename)
-    tmp_path   = os.path.join(UPLOAD_FOLDER, f'{uuid.uuid4().hex}_{filename}')
+    tmp_path   = os.path.join(_upload_folder(), f'{uuid.uuid4().hex}_{filename}')
     f.save(tmp_path)
 
     try:
@@ -232,7 +272,10 @@ def api_preview():
         if ext == '.docx':
             full_text, _ = read_docx(tmp_path)
         elif ext == '.pdf':
-            full_text = read_pdf(tmp_path)
+            if not _PDF_SUPPORTED:
+                return jsonify({'error': 'PDF support unavailable on this server. Please convert to .txt'}), 200
+            from file_handlers import read_pdf as _read_pdf
+            full_text = _read_pdf(tmp_path)
         else:
             full_text = read_text(tmp_path)
 
@@ -308,25 +351,31 @@ def api_search():
 
 @app.route('/api/share/<result_id>', methods=['POST'])
 def share_result(result_id: str):
-    entry = db.get_history(result_id)
+    if not _DB_OK:
+        return jsonify({'error': 'Sharing unavailable (no database)'}), 503
+    entry = _safe_db_call(db.get_history, result_id)
     if not entry:
         return jsonify({'error': 'Result not found'}), 404
-    token = db.create_share_token(result_id, ttl_hours=24)
-    url   = url_for('download_shared', token=token, _external=True)
-    return jsonify({'url': url, 'token': token, 'expires_in': '24 hours'})
+    token = _safe_db_call(db.create_share_token, result_id, ttl_hours=24)
+    if not token:
+        return jsonify({'error': 'Could not create share token'}), 500
+    share_url = url_for('download_shared', token=token, _external=True)
+    return jsonify({'url': share_url, 'token': token, 'expires_in': '24 hours'})
 
 
 # ── API: History ──────────────────────────────────────────────────────────────
 
 @app.route('/api/history')
 def api_history():
-    entries = db.list_history(limit=50)
+    if not _DB_OK:
+        return jsonify({'history': []})
+    entries = _safe_db_call(db.list_history, 50) or []
     return jsonify({'history': entries})
 
 
 @app.route('/api/history/<entry_id>', methods=['DELETE'])
 def api_delete_history(entry_id: str):
-    deleted = db.delete_history(entry_id)
+    deleted = _safe_db_call(db.delete_history, entry_id) or False
     return jsonify({'deleted': deleted})
 
 
@@ -335,22 +384,27 @@ def api_delete_history(entry_id: str):
 @app.route('/api/prefs', methods=['GET', 'POST'])
 def api_prefs():
     sid = get_session_id()
+    if not _DB_OK:
+        return jsonify({'theme': 'dark', 'default_style': 'apa'})
     if request.method == 'POST':
         data = request.get_json(silent=True) or {}
-        db.update_prefs(sid, **data)
+        _safe_db_call(db.update_prefs, sid, **data)
         return jsonify({'status': 'ok'})
-    return jsonify(db.get_or_create_prefs(sid))
+    return jsonify(_safe_db_call(db.get_or_create_prefs, sid) or {})
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
 
 @app.route('/health')
 def health():
-    db.cleanup_expired()   # opportunistic cleanup
+    if _DB_OK:
+        _safe_db_call(db.cleanup_expired)
     return jsonify({
-        'status':  'ok',
-        'styles':  SUPPORTED_STYLES,
-        'version': '2.0.0',
+        'status':       'ok',
+        'styles':       SUPPORTED_STYLES,
+        'version':      '2.0.0',
+        'db':           _DB_OK,
+        'pdf_support':  _PDF_SUPPORTED,
     })
 
 
@@ -363,7 +417,10 @@ def _compute_confidence(input_path: str, ext: str, style: str,
         if ext == '.docx':
             full_text, _ = read_docx(input_path)
         elif ext == '.pdf':
-            full_text = read_pdf(input_path)
+            if not _PDF_SUPPORTED:
+                return {'total': 0, 'cited': 0, 'avg_confidence': 0, 'items': []}
+            from file_handlers import read_pdf as _read_pdf
+            full_text = _read_pdf(input_path)
         else:
             full_text = read_text(input_path)
 

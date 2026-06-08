@@ -21,7 +21,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-DB_PATH = os.environ.get('DB_PATH', str(Path(__file__).parent / 'citation_app.db'))
+import os
+_IS_VERCEL = os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV')
+_DEFAULT_DIR = '/tmp' if _IS_VERCEL else str(Path(__file__).parent)
+DB_PATH = os.environ.get('DB_PATH', str(Path(_DEFAULT_DIR) / 'citation_app.db'))
 
 
 class Database:

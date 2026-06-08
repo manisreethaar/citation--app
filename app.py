@@ -8,6 +8,7 @@ Open:  http://localhost:5000
 import os
 import sys
 import uuid
+import zipfile
 import tempfile
 import secrets
 from pathlib import Path
@@ -546,6 +547,169 @@ def _build_result_context(entry: dict, result_id: str) -> dict:
     }
 
 
+# ── Batch processing ──────────────────────────────────────────────────────────
+
+@app.route('/batch', methods=['POST'])
+def batch_process():
+    """
+    Accept a ZIP file containing .docx/.pdf/.txt documents.
+    Process each with the chosen citation style.
+    Return a ZIP of all cited outputs.
+    """
+    if 'zipfile' not in request.files:
+        flash('No ZIP file uploaded.', 'error')
+        return redirect(url_for('index'))
+
+    zf = request.files['zipfile']
+    if not zf or not zf.filename.lower().endswith('.zip'):
+        flash('Please upload a .zip file.', 'error')
+        return redirect(url_for('index'))
+
+    style = request.form.get('style', 'apa').lower()
+    if style not in SUPPORTED_STYLES:
+        style = 'apa'
+
+    upload_dir = _upload_folder()
+    zip_path   = os.path.join(upload_dir, f'{uuid.uuid4().hex}_batch.zip')
+    zf.save(zip_path)
+
+    output_zip_path = os.path.join(upload_dir, f'{uuid.uuid4().hex}_batch_cited.zip')
+    processed = 0
+    errors    = []
+
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zin:
+            names = [n for n in zin.namelist()
+                     if not n.startswith('__MACOSX')
+                     and Path(n).suffix.lower() in {'.docx', '.pdf', '.txt'}]
+
+            if not names:
+                flash('No supported files (.docx/.pdf/.txt) found in ZIP.', 'error')
+                return redirect(url_for('index'))
+
+            with zipfile.ZipFile(output_zip_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for name in names:
+                    tmp_in  = os.path.join(upload_dir, f'{uuid.uuid4().hex}_{Path(name).name}')
+                    stem    = Path(name).stem
+                    ext     = Path(name).suffix.lower()
+                    out_name= f'{stem}_cited_{style}{ext}'
+                    tmp_out = os.path.join(upload_dir, f'{uuid.uuid4().hex}_{out_name}')
+                    try:
+                        data = zin.read(name)
+                        with open(tmp_in, 'wb') as f:
+                            f.write(data)
+                        result_path = process_document(tmp_in, style, tmp_out, print_report=False)
+                        zout.write(result_path, out_name)
+                        processed += 1
+                    except Exception as e:
+                        errors.append(f'{name}: {str(e)}')
+                    finally:
+                        for p in (tmp_in, tmp_out):
+                            try: os.remove(p)
+                            except OSError: pass
+
+        download_name = f'cited_{style}_batch.zip'
+        return send_file(output_zip_path, as_attachment=True, download_name=download_name)
+
+    except zipfile.BadZipFile:
+        flash('Invalid ZIP file.', 'error')
+        return redirect(url_for('index'))
+    except Exception as e:
+        flash(f'Batch processing error: {str(e)}', 'error')
+        return redirect(url_for('index'))
+    finally:
+        try: os.remove(zip_path)
+        except OSError: pass
+
+
+# ── HTML diff export ──────────────────────────────────────────────────────────
+
+@app.route('/download/diff/<result_id>')
+def download_diff_html(result_id: str):
+    """
+    Generate a downloadable HTML diff report for a processed document.
+    """
+    entry = _safe_db_call(db.get_history, result_id) if _DB_OK else None
+    if not entry:
+        abort(404)
+
+    result_path = entry.get('result_path')
+    if not result_path or not os.path.exists(result_path):
+        abort(404)
+
+    try:
+        ext = Path(entry['output_name']).suffix.lower()
+        cited_text = read_text(result_path) if ext == '.txt' else ''
+
+        html = _build_diff_html(
+            filename=entry['filename'],
+            style=entry['style'],
+            cited_text=cited_text,
+            total_refs=entry.get('total_refs', 0),
+            cited_refs=entry.get('cited_refs', 0),
+            avg_conf=entry.get('avg_conf', 0),
+        )
+
+        from flask import Response
+        return Response(
+            html,
+            mimetype='text/html',
+            headers={'Content-Disposition': f'attachment; filename="diff_{entry["filename"]}.html"'}
+        )
+    except Exception as e:
+        flash(f'Could not generate diff: {str(e)}', 'error')
+        return redirect(url_for('result_page', result_id=result_id))
+
+
+def _build_diff_html(filename, style, cited_text, total_refs, cited_refs, avg_conf):
+    """Build a self-contained HTML diff report."""
+    import html as html_mod
+
+    # Highlight citation markers
+    import re
+    highlighted = re.sub(
+        r'(\([A-Z][a-z]+(?:\s+et\s+al\.)?(?:,\s*\d{4})?(?:\s*[a-z])?\)|\[\d+\]|[⁰¹²³⁴⁵⁶⁷⁸⁹]+)',
+        r'<mark class="cite">\1</mark>',
+        html_mod.escape(cited_text)
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Citation Diff — {html_mod.escape(filename)}</title>
+<style>
+  body {{ font-family: system-ui,-apple-system,sans-serif; background:#0d1117; color:#e6edf3;
+          padding:2rem; line-height:1.7; }}
+  h1   {{ font-size:1.5rem; margin-bottom:.25rem; }}
+  .meta {{ color:#8b949e; font-size:.9rem; margin-bottom:2rem; }}
+  .stats {{ display:flex; gap:1.5rem; flex-wrap:wrap; margin-bottom:2rem; }}
+  .stat {{ background:#161b22; border:1px solid #30363d; border-radius:8px;
+            padding:.75rem 1.25rem; text-align:center; }}
+  .stat strong {{ display:block; font-size:1.5rem; color:#58a6ff; }}
+  .stat span   {{ font-size:.8rem; color:#8b949e; }}
+  pre  {{ background:#161b22; border:1px solid #30363d; border-radius:8px;
+           padding:1.5rem; white-space:pre-wrap; word-break:break-word;
+           font-size:.85rem; font-family:'JetBrains Mono',monospace; }}
+  mark.cite {{ background:rgba(63,185,80,.25); color:#3fb950;
+               border-radius:3px; padding:.05rem .2rem;
+               border-bottom:2px solid #3fb950; }}
+  footer {{ margin-top:3rem; color:#6e7681; font-size:.8rem; }}
+</style>
+</head>
+<body>
+<h1>📄 Citation Diff Report</h1>
+<div class="meta">File: <strong>{html_mod.escape(filename)}</strong> · Style: <strong>{style.upper()}</strong></div>
+<div class="stats">
+  <div class="stat"><strong>{total_refs}</strong><span>Total refs</span></div>
+  <div class="stat"><strong>{cited_refs}</strong><span>Cited</span></div>
+  <div class="stat"><strong>{avg_conf:.0f}%</strong><span>Avg confidence</span></div>
+</div>
+<pre>{highlighted}</pre>
+<footer>Generated by Auto-Citer v2.0 · <mark class="cite">highlighted</mark> = inserted citation</footer>
+</body></html>"""
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
@@ -553,7 +717,8 @@ if __name__ == '__main__':
     print('  Auto-Citer v2.0')
     print('  http://localhost:5000')
     print(f'  Styles: {", ".join(SUPPORTED_STYLES)}')
-    print('  DB:', db.db_path)
+    if _DB_OK and db:
+        print('  DB:', db.db_path)
     print('=' * 56)
     app.run(
         debug=os.environ.get('FLASK_DEBUG', '0') == '1',

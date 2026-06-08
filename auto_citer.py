@@ -37,7 +37,7 @@ _REF_SECTION_RE = re.compile(
     re.IGNORECASE
 )
 
-SUPPORTED_STYLES = ['apa', 'vancouver', 'ieee', 'nature', 'mla', 'chicago']
+SUPPORTED_STYLES = ['apa', 'vancouver', 'ieee', 'nature', 'mla', 'chicago', 'harvard', 'ama']
 
 # Maximum file size (16 MB)
 MAX_FILE_SIZE = 16 * 1024 * 1024

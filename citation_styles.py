@@ -1,8 +1,9 @@
 """
 citation_styles.py  –  Format inline citations and bibliography entries.
 
-Supported styles: apa | vancouver | ieee | nature | mla | chicago
+Supported styles: apa | vancouver | ieee | nature | mla | chicago | harvard | ama
 """
+
 
 import re
 from typing import List
@@ -14,16 +15,13 @@ from reference_parser import Reference
 def inline_citation(ref: Reference, style: str, superscript: bool = False) -> str:
     """Return the inline citation string for the given reference and style."""
     style = style.lower()
-    if style == 'apa':
-        return _apa_inline(ref)
-    elif style in ('vancouver', 'ieee'):
-        return f'[{ref.index}]'
-    elif style == 'nature':
-        return _to_superscript(str(ref.index)) if superscript else f'[{ref.index}]'
-    elif style == 'mla':
-        return _mla_inline(ref)
-    elif style == 'chicago':
-        return _chicago_inline(ref)
+    if style == 'apa':       return _apa_inline(ref)
+    elif style in ('vancouver', 'ieee'): return f'[{ref.index}]'
+    elif style == 'nature':  return _to_superscript(str(ref.index)) if superscript else f'[{ref.index}]'
+    elif style == 'mla':     return _mla_inline(ref)
+    elif style == 'chicago': return _chicago_inline(ref)
+    elif style == 'harvard': return _harvard_inline(ref)
+    elif style == 'ama':     return _to_superscript(str(ref.index))
     raise ValueError(f"Unknown style: {style}")
 
 
@@ -142,6 +140,8 @@ def _format_entry(ref: Reference, style: str) -> str:
     if style == 'nature':    return _nature_entry(ref)
     if style == 'mla':       return _mla_entry(ref)
     if style == 'chicago':   return _chicago_entry(ref)
+    if style == 'harvard':   return _harvard_entry(ref)
+    if style == 'ama':       return _ama_entry(ref)
     return f'{ref.index}. {ref.raw}'
 
 
@@ -366,3 +366,116 @@ def _journal_block(ref: Reference) -> str:
     if ref.pages:
         parts.append(ref.pages)
     return ', '.join(parts) + '.' if parts else ''
+
+
+# ── Harvard ────────────────────────────────────────────────────────────────────────
+
+def _harvard_inline(ref: Reference) -> str:
+    """
+    Harvard author-date inline: (Smith, 2020) / (Smith and Jones, 2020) /
+    (Smith et al., 2020)
+    """
+    year = ref.year or 'n.d.'
+    if not ref.authors:
+        label = ref.title[:20] if ref.title else 'Anon'
+    elif len(ref.authors) == 1:
+        label = _surname(ref.authors[0])
+    elif len(ref.authors) == 2:
+        label = f"{_surname(ref.authors[0])} and {_surname(ref.authors[1])}"
+    else:
+        label = f"{_surname(ref.authors[0])} et al."
+    return f'({label}, {year})'
+
+
+def _harvard_entry(ref: Reference) -> str:
+    """
+    Harvard reference list format:
+    Smith, J. and Jones, A. (2020) 'Title of article', *Journal Name*,
+    vol. 10, no. 2, pp. 1-5.
+    """
+    parts = []
+    if ref.authors:
+        parts.append(_harvard_author_list(ref.authors))
+    if ref.year:
+        parts.append(f'({ref.year})')
+    if ref.title:
+        parts.append(f"\u2018{ref.title}\u2019,")
+    if ref.journal:
+        parts.append(f'{ref.journal},')
+    if ref.volume:
+        parts.append(f'vol. {ref.volume},')
+    if ref.issue:
+        parts.append(f'no. {ref.issue},')
+    if ref.pages:
+        parts.append(f'pp. {ref.pages}.')
+    if ref.doi:
+        parts.append(ref.doi)
+    result = ' '.join(parts)
+    return re.sub(r',\s*\.', '.', result)   # clean trailing comma-period
+
+
+def _harvard_author_list(authors: list) -> str:
+    """Harvard: Smith, J. and Jones, A. and Brown, B. (up to 3), et al. beyond."""
+    fmt = []
+    for a in authors[:3]:
+        surname, inits = _normalise_author(a)
+        fmt.append(f'{surname}, {inits}' if inits else surname)
+    result = ' and '.join(fmt)
+    if len(authors) > 3:
+        result += ' et al.'
+    return result
+
+
+# ── AMA (American Medical Association) ────────────────────────────────────────────
+
+def _ama_entry(ref: Reference) -> str:
+    """
+    AMA 11th edition:
+    1. Smith JK, Jones AL, Brown BC. Title of article. *Journal Name*.
+       Year;vol(issue):pages. doi:10.xxxx/yyy
+    """
+    parts = [f'{ref.index}.']
+    if ref.authors:
+        parts.append(_ama_author_list(ref.authors))
+    if ref.title:
+        parts.append(f'{ref.title}.')
+    if ref.journal:
+        parts.append(f'{ref.journal}.')
+    viy = []
+    if ref.year:
+        viy.append(ref.year)
+    if ref.volume:
+        v = ref.volume
+        if ref.issue:
+            v += f'({ref.issue})'
+        viy.append(v)
+    if ref.pages:
+        viy.append(ref.pages)
+    if viy:
+        # Format: Year;vol(issue):pages
+        if len(viy) == 3:
+            parts.append(f'{viy[0]};{viy[1]}:{viy[2]}.')
+        elif len(viy) == 2:
+            parts.append(f'{viy[0]};{viy[1]}.')
+        else:
+            parts.append(viy[0] + '.')
+    if ref.doi:
+        parts.append(f'doi:{ref.doi.replace("https://doi.org/", "")}')
+    return ' '.join(parts)
+
+
+def _ama_author_list(authors: list) -> str:
+    """
+    AMA: Smith JK, Jones AL. Up to 6 authors, then et al.
+    No periods after initials.
+    """
+    fmt = []
+    for a in authors[:6]:
+        surname, inits = _normalise_author(a)
+        # AMA uses no spaces or dots: "Smith JK"
+        inits_nodot = inits.replace('.', '').replace(' ', '')
+        fmt.append(f'{surname} {inits_nodot}' if inits_nodot else surname)
+    result = ', '.join(fmt)
+    if len(authors) > 6:
+        result += ', et al.'
+    return result + '.'

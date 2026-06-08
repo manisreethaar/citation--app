@@ -239,9 +239,4 @@ def process():
         flash(str(e), 'error')
         return redirect(url_for('index'))
     except Exception as e:
-        flash(f'Unexpected error: {e}', 'error')
-        return redirect(url_for('index'))
-
-
-
-# ─── Plagiarism checker HTML ────────────────────────────────────────�
+        fl

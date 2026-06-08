@@ -87,6 +87,12 @@ HTML = """
 
 <div class="container">
 
+  <div style="text-align:center;margin-bottom:1rem">
+    <a href="/check" style="display:inline-block;background:#38a169;color:#fff;
+       border-radius:8px;padding:.55rem 1.4rem;font-size:.9rem;font-weight:600;
+       text-decoration:none">🔍 Plagiarism Checker</a>
+  </div>
+
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for cat, msg in messages %}
       <div class="alert alert-{{ cat }}">{{ msg }}</div>
@@ -237,6 +243,4 @@ def process():
 
     except (ValueError, SystemExit) as e:
         flash(str(e), 'error')
-        return redirect(url_for('index'))
-    except Exception as e:
-        fl
+        return redirect(url_for('index')

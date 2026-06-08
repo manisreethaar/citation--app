@@ -218,7 +218,23 @@ def process():
         text = read_file(input_path)
         result = run_pipeline(text, style, do_report)
         write_file(result.full_text, output_path, original_path=input_path)
-        return send_file(output_path, as_attachment=True, download_name=out_name)
+
+        # Write changes report
+        report_name = Path(f.filename).stem + '_changes.txt'
+        report_path = os.path.join(UPLOAD_DIR, report_name)
+        with open(report_path, 'w', encoding='utf-8') as rf:
+            rf.write(result.changes_report.full_report())
+
+        # Zip both files together for download
+        import zipfile
+        zip_name = Path(f.filename).stem + '_cited_output.zip'
+        zip_path = os.path.join(UPLOAD_DIR, zip_name)
+        with zipfile.ZipFile(zip_path, 'w') as zf:
+            zf.write(output_path, out_name)
+            zf.write(report_path, report_name)
+
+        return send_file(zip_path, as_attachment=True, download_name=zip_name)
+
     except (ValueError, SystemExit) as e:
         flash(str(e), 'error')
         return redirect(url_for('index'))

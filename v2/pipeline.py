@@ -9,7 +9,8 @@ Stage 2 — Reference parsing: rich representation
 Stage 3 — Scoring: multi-signal relevance scoring
 Stage 4 — Insertion: confirmed matches only, right-to-left, clean
 Stage 5 — Coverage audit: report uncited refs + review candidates
-Stage 6 — Output: write cited document in target style
+Stage 6 — Changes report: full log of what changed, where, and why
+Stage 7 — Output: write cited document in target style
 """
 
 import re
@@ -26,7 +27,8 @@ from scoring_engine import (
     score_document, best_matches_per_ref, THRESHOLD_AUTO
 )
 from coverage_audit import audit_coverage
-from style_engine import inline_marker, format_bibliography, SUPPORTED_STYLES
+from style_engine import inline_marker, format_bibliography, format_entry, SUPPORTED_STYLES
+from changes_report import ChangesReport, InsertedCitation, BibChange
 
 
 # ─── Result object ────────────────────────────────────────────────────────────
@@ -37,6 +39,7 @@ class PipelineResult:
         self.bibliography: str = ''
         self.full_text: str = ''
         self.coverage_report = None
+        self.changes_report: Optional[ChangesReport] = None
         self.refs: List[Reference] = []
         self.num_inserted: int = 0
         self.num_refs: int = 0
@@ -96,36 +99,44 @@ def run_pipeline(text: str, style: str = 'apa',
     report = audit_coverage(refs, all_matches, confirmed_ref_indices)
     result.coverage_report = report
 
-    if print_report:
-        print(report.summary())
-
     # ── Stage 6: Insert citations into clean body text ────────────────────────
-    # Group confirmed matches by sentence — one sentence may cite multiple refs
     by_sentence: Dict[int, List] = {}
     for m in confirmed:
         by_sentence.setdefault(m.sentence.index, []).append(m)
 
-    # Build insertion map: char_end_of_sentence → citation string
-    # We insert citations at the END of the sentence they belong to
     insertions: List[Tuple[int, str]] = []
+    inserted_citations: List[InsertedCitation] = []
+
+    # Lookup: which inventory items were at this sentence (for "was_existing" flag)
+    inv_by_ref_at_sent: Dict[Tuple[int,int], str] = {}
+    for dc in inventory:
+        for ref_idx in dc.ref_indices:
+            for sent in sentences:
+                if sent.char_start <= dc.char_start <= sent.char_end + 5:
+                    inv_by_ref_at_sent[(sent.index, ref_idx)] = dc.raw_text
+
     for sent_idx, matches in by_sentence.items():
         sent = matches[0].sentence
-        # Sort refs within this sentence by index for consistent ordering
-        sorted_refs = sorted(matches, key=lambda m: m.reference.index)
-        # Build combined citation string
-        if style == 'apa':
-            # APA: separate citations for each ref
-            cite_str = ' '.join(inline_marker(m.reference, style) for m in sorted_refs)
-        else:
-            # Numbered styles: [1,2,3] grouped or separate
-            markers = [inline_marker(m.reference, style) for m in sorted_refs]
-            cite_str = ' '.join(markers)
-
-        # Insert position: right before the sentence-ending punctuation
+        sorted_matches = sorted(matches, key=lambda m: m.reference.index)
+        markers = [inline_marker(m.reference, style) for m in sorted_matches]
+        cite_str = ' '.join(markers)
         text_pos = sent.char_end
         insertions.append((text_pos, ' ' + cite_str))
 
-    # Apply insertions right-to-left (highest char position first)
+        for m, marker in zip(sorted_matches, markers):
+            key = (sent.index, m.reference.index)
+            old_marker = inv_by_ref_at_sent.get(key)
+            inserted_citations.append(InsertedCitation(
+                reference=m.reference,
+                sentence_text=sent.text,
+                sentence_index=sent.index,
+                section=sent.section_type,
+                score=m.score,
+                was_existing=old_marker is not None,
+                old_marker=old_marker,
+                new_marker=marker,
+            ))
+
     cited_body = clean_body
     for pos, cite_str in sorted(insertions, key=lambda x: x[0], reverse=True):
         cited_body = cited_body[:pos] + cite_str + cited_body[pos:]
@@ -133,8 +144,28 @@ def run_pipeline(text: str, style: str = 'apa',
     result.cited_body = cited_body
     result.num_inserted = len(insertions)
 
-    # ── Stage 7: Format bibliography ──────────────────────────────────────────
+    # ── Stage 7: Format bibliography + build bib change log ───────────────────
     result.bibliography = format_bibliography(refs, style)
+
+    bib_changes = []
+    for ref in refs:
+        new_entry = format_entry(ref, style)
+        bib_changes.append(BibChange(
+            reference=ref,
+            old_text=ref.raw,
+            new_text=new_entry,
+        ))
+
+    # ── Stage 8: Build changes report ─────────────────────────────────────────
+    changes = ChangesReport(style=style)
+    changes.inserted = inserted_citations
+    changes.not_cited = report.uncited
+    changes.bib_changes = bib_changes
+    changes.stripped_markers = inventory
+    result.changes_report = changes
+
+    if print_report:
+        print(changes.full_report())
 
     # ── Assemble final document ───────────────────────────────────────────────
     result.full_text = cited_body.rstrip() + '\n\n' + result.bibliography
@@ -165,11 +196,17 @@ def process_file(input_path: str, style: str = 'apa',
     text = read_file(input_path)
     result = run_pipeline(text, style, print_report)
 
-    print(f"[auto-citer v2] Refs found    : {result.num_refs}")
-    print(f"[auto-citer v2] Citations added: {result.num_inserted}")
-    print(f"[auto-citer v2] Uncited refs  : {len(result.coverage_report.uncited)}")
+    print(f"[auto-citer v2] Refs found      : {result.num_refs}")
+    print(f"[auto-citer v2] Citations added : {result.num_inserted}")
+    print(f"[auto-citer v2] Uncited refs    : {len(result.coverage_report.uncited)}")
 
     write_file(result.full_text, output_path, original_path=input_path)
-    print(f"[auto-citer v2] Output   : {output_path}")
+    print(f"[auto-citer v2] Output          : {output_path}")
+
+    # Always write changes report alongside the output
+    report_path = str(Path(output_path).parent / (Path(output_path).stem + '_changes.txt'))
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write(result.changes_report.full_report())
+    print(f"[auto-citer v2] Changes report  : {report_path}")
 
     return output_path

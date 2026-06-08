@@ -28,7 +28,7 @@ def main():
     parser.add_argument('--output', '-o', default=None,
                         help='Output file (default: <input>_cited.<ext>)')
     parser.add_argument('--report', '-r', action='store_true',
-                        help='Print coverage report after processing')
+                        help='Print full changes report (what was inserted, where, and why)')
 
     args = parser.parse_args()
 

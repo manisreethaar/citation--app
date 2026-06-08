@@ -555,6 +555,118 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast(removed > 0 ? `✅ Removed ${removed} duplicate${removed > 1 ? 's' : ''}` : 'No duplicates found.');
   });
 
+  // ── AI language detector ──────────────────────────────────────
+  const aiLangDrop = document.getElementById('ai-lang-drop-zone');
+  const aiLangFile = document.getElementById('ai-lang-file-input');
+  const aiLangInfo = document.getElementById('ai-lang-file-info');
+  const aiLangText = document.getElementById('ai-lang-text');
+  const aiLangBtn = document.getElementById('btn-ai-lang-detect');
+  const aiLangResult = document.getElementById('ai-lang-result');
+
+  if (aiLangDrop && aiLangFile) {
+    aiLangDrop.addEventListener('click', () => aiLangFile.click());
+    aiLangFile.addEventListener('change', () => setAiLangFileInfo(aiLangFile.files[0]));
+    aiLangDrop.addEventListener('dragover', e => { e.preventDefault(); aiLangDrop.classList.add('drag-over'); });
+    aiLangDrop.addEventListener('dragleave', () => aiLangDrop.classList.remove('drag-over'));
+    aiLangDrop.addEventListener('drop', e => {
+      e.preventDefault();
+      aiLangDrop.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+      try {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        aiLangFile.files = dt.files;
+      } catch (_) {}
+      setAiLangFileInfo(file);
+    });
+  }
+
+  function setAiLangFileInfo(file) {
+    if (!aiLangInfo || !file) return;
+    aiLangInfo.textContent = `${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
+    aiLangInfo.style.color = 'var(--green)';
+  }
+
+  aiLangBtn?.addEventListener('click', async () => {
+    const text = aiLangText?.value.trim() || '';
+    const file = aiLangFile?.files?.[0];
+    if (!text && !file) {
+      showToast('Paste text or upload a document first.');
+      return;
+    }
+
+    aiLangBtn.disabled = true;
+    aiLangBtn.querySelector('.btn-text').textContent = 'Checking...';
+    if (aiLangResult) {
+      aiLangResult.style.display = 'block';
+      aiLangResult.innerHTML = '<div class="fetch-loading">Analysing language patterns...</div>';
+    }
+
+    try {
+      let resp;
+      if (file) {
+        const fd = new FormData();
+        fd.append('document', file);
+        resp = await fetch(window.AUTOCITER?.aiLanguageUrl || '/api/ai-language/detect', { method: 'POST', body: fd });
+      } else {
+        resp = await fetch(window.AUTOCITER?.aiLanguageUrl || '/api/ai-language/detect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, filename: 'pasted text' })
+        });
+      }
+      const data = await resp.json();
+      renderAiLanguageResult(data);
+    } catch (e) {
+      if (aiLangResult) aiLangResult.innerHTML = `<div class="fetch-error">${escapeHtml(e.message)}</div>`;
+    } finally {
+      aiLangBtn.disabled = false;
+      aiLangBtn.querySelector('.btn-text').textContent = 'Check AI Language';
+    }
+  });
+
+  function renderAiLanguageResult(data) {
+    if (!aiLangResult) return;
+    aiLangResult.style.display = 'block';
+    if (data.error) {
+      aiLangResult.innerHTML = `<div class="fetch-error">${escapeHtml(data.error)}</div>`;
+      return;
+    }
+
+    const pct = data.overall_percent || 0;
+    const tier = pct >= 65 ? 'high' : (pct >= 40 ? 'medium' : 'low');
+    const locations = data.locations || [];
+    aiLangResult.innerHTML = `
+      <div class="ai-lang-score-card ai-lang-${tier}">
+        <div class="ai-lang-score">
+          <strong>${pct}%</strong>
+          <span>AI-language signal</span>
+        </div>
+        <div class="ai-lang-summary">
+          <div>${escapeHtml(data.summary || '')}</div>
+          <small>${data.ai_like_words || 0} weighted AI-like words across ${data.total_words || 0} total words</small>
+        </div>
+      </div>
+      <div class="ai-lang-locations">
+        <div class="section-label">Flagged locations <span class="badge">${locations.length}</span></div>
+        ${locations.length ? locations.map(renderAiLanguageLocation).join('') : '<div class="fetch-empty">No strong AI-language locations found.</div>'}
+      </div>`;
+  }
+
+  function renderAiLanguageLocation(item) {
+    const reasons = (item.reasons || []).map(r => `<span class="ai-lang-reason">${escapeHtml(r)}</span>`).join('');
+    return `
+      <div class="ai-lang-location ai-lang-${item.tier || 'low'}">
+        <div class="ai-lang-location-head">
+          <strong>${item.percent}%</strong>
+          <span>Line ${item.line}, paragraph ${item.paragraph}</span>
+        </div>
+        <p>${escapeHtml(item.text)}</p>
+        <div class="ai-lang-reasons">${reasons}</div>
+      </div>`;
+  }
+
   // ── Utilities ─────────────────────────────────────────────────
   function confTier(pct) {
     if (pct == null) return 'medium';
@@ -565,6 +677,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function truncate(str, max) {
     return str && str.length > max ? str.slice(0, max) + '…' : str;
+  }
+
+  function escapeHtml(str) {
+    return String(str || '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
   }
 
 });

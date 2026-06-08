@@ -36,6 +36,19 @@ from file_handlers       import read_text, read_docx, find_refs_start_paragraph
 from diff_engine         import build_diff_chunks
 from database            import Database
 from doi_fetcher         import fetch_by_doi, fetch_by_pmid, search_crossref
+from ai_language_detector import detect_ai_language
+
+
+# ── v2 Pipeline (semantic citation engine) ────────────────────────────────────
+import sys as _sys
+_sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'v2'))
+try:
+    from v2.bridge import process_v2, preview_v2, SUPPORTED_STYLES_V2
+    _V2_AVAILABLE = True
+except Exception as _v2_err:
+    print(f'[Warning] v2 pipeline unavailable: {_v2_err}', file=_sys.stderr)
+    _V2_AVAILABLE = False
+    SUPPORTED_STYLES_V2 = []
 
 # Optional: Gemini AI features
 try:
@@ -90,6 +103,19 @@ def _upload_folder() -> str:
     return _get_upload_folder()
 
 
+def _read_uploaded_text(path: str, ext: str) -> str:
+    """Read an uploaded document into plain text for analysis endpoints."""
+    if ext == '.docx':
+        full_text, _ = read_docx(path)
+        return full_text
+    if ext == '.pdf':
+        if not _PDF_SUPPORTED:
+            raise RuntimeError('PDF support unavailable on this server. Please convert to .txt.')
+        from file_handlers import read_pdf as _read_pdf
+        return _read_pdf(path)
+    return read_text(path)
+
+
 def _safe_db_call(fn, *args, **kwargs):
     """Call a DB function safely — returns None if DB unavailable."""
     if not _DB_OK or db is None:
@@ -118,6 +144,7 @@ def index():
         supported_styles=SUPPORTED_STYLES,
         default_style=prefs.get('default_style', 'apa'),
         ai_available=_AI_AVAILABLE,
+        v2_available=_V2_AVAILABLE,
     )
 
 
@@ -185,12 +212,24 @@ def process():
     out_path = os.path.join(upload_dir, f'{uuid.uuid4().hex}_{out_name}')
 
     try:
+        # ── Read full text BEFORE process_document deletes nothing (we delete below) ──
+        if ext == '.docx':
+            _pre_text, _ = read_docx(input_path)
+        elif ext == '.pdf':
+            if not _PDF_SUPPORTED:
+                flash('PDF support unavailable on this server. Convert to .txt first.', 'error')
+                return redirect(url_for('index'))
+            from file_handlers import read_pdf as _rpdf
+            _pre_text = _rpdf(input_path)
+        else:
+            _pre_text = read_text(input_path)
+
         result_path = process_document(
             input_path, style, out_path, print_report=False
         )
 
-        # Build confidence data
-        conf_data = _compute_confidence(input_path, ext, style, strict_only)
+        # Build confidence data from pre-read text (input_path still exists here)
+        conf_data = _compute_confidence_from_text(_pre_text, style, strict_only)
         total_refs  = conf_data['total']
         cited_refs  = conf_data['cited']
         avg_conf    = conf_data['avg_confidence']
@@ -289,6 +328,17 @@ def api_preview():
         else:
             full_text = read_text(tmp_path)
 
+        # Use v2 engine for richer preview if available
+        if _V2_AVAILABLE:
+            try:
+                preview_data = preview_v2(full_text)
+                return jsonify(preview_data)
+            except ValueError as ve:
+                return jsonify({'error': str(ve)}), 200
+            except Exception:
+                pass  # fall through to v1
+
+        # v1 fallback
         body, ref_section = split_references_from_body(full_text)
         if not ref_section.strip():
             return jsonify({'error': 'No References section found in document.'}), 200
@@ -297,23 +347,19 @@ def api_preview():
         if not refs:
             return jsonify({'error': 'Could not parse any references.'}), 200
 
-        # Detect existing citation mode
         from citation_detector import detect_citation_mode, extract_cited_numbers
         detection = detect_citation_mode(body)
         cited_nums = set(extract_cited_numbers(body)) if detection['mode'] == 'numbered' else set()
 
-        # Compute per-reference confidence
         ref_list = []
         for ref in refs:
             if detection['mode'] == 'numbered':
-                # For numbered docs: confidence = whether [n] exists in body
                 is_cited = ref.index in cited_nums
                 confidence = 95 if is_cited else 0
             elif detection['mode'] == 'superscript':
-                confidence = 80  # can't easily verify per-ref
+                confidence = 80
                 is_cited   = True
             else:
-                # Author-year: scan for name+year matches
                 hits = find_citation_positions(body, [ref])
                 confidence = _score_confidence(hits)
                 is_cited   = len(hits) > 0
@@ -330,9 +376,9 @@ def api_preview():
             })
 
         return jsonify({
-            'refs':           ref_list,
-            'total':          len(refs),
-            'body_words':     len(body.split()),
+            'refs':       ref_list,
+            'total':      len(refs),
+            'body_words': len(body.split()),
             'detection': {
                 'mode':        detection['mode'],
                 'count':       detection['count'],
@@ -379,6 +425,47 @@ def api_search():
         return jsonify({'error': 'No query provided'}), 400
     results = search_crossref(q, limit=8)
     return jsonify({'results': results, 'count': len(results)})
+
+
+# ── API: AI-language detector ─────────────────────────────────────────────────
+
+@app.route('/api/ai-language/detect', methods=['POST'])
+def api_ai_language_detect():
+    """Analyse pasted text or an uploaded file for AI-like language."""
+    tmp_path = None
+    try:
+        if request.is_json:
+            data = request.get_json(silent=True) or {}
+            full_text = (data.get('text') or '').strip()
+            filename = data.get('filename') or 'pasted text'
+        else:
+            f = request.files.get('document')
+            if not f or f.filename == '':
+                return jsonify({'error': 'Upload a document or paste text first.'}), 400
+            if not allowed_file(f.filename):
+                return jsonify({'error': 'Unsupported file type. Use .docx, .pdf, or .txt'}), 400
+
+            filename = secure_filename(f.filename)
+            ext = Path(filename).suffix.lower()
+            tmp_path = os.path.join(_upload_folder(), f'{uuid.uuid4().hex}_{filename}')
+            f.save(tmp_path)
+            full_text = _read_uploaded_text(tmp_path, ext)
+
+        if not full_text or len(full_text.split()) < 20:
+            return jsonify({'error': 'Not enough text to analyse. Provide at least 20 words.'}), 400
+
+        result = detect_ai_language(full_text)
+        result['filename'] = filename
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 # ── API: Sharing ──────────────────────────────────────────────────────────────
@@ -444,20 +531,41 @@ def health():
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _compute_confidence(input_path: str, ext: str, style: str,
-                        strict_only: bool = False) -> dict:
-    """Re-read the document to compute per-ref confidence scores."""
+def _compute_confidence_from_text(full_text: str, style: str,
+                                   strict_only: bool = False) -> dict:
+    """Compute per-ref confidence scores from already-read document text."""
     try:
-        if ext == '.docx':
-            full_text, _ = read_docx(input_path)
-        elif ext == '.pdf':
-            if not _PDF_SUPPORTED:
-                return {'total': 0, 'cited': 0, 'avg_confidence': 0, 'items': []}
-            from file_handlers import read_pdf as _read_pdf
-            full_text = _read_pdf(input_path)
-        else:
-            full_text = read_text(input_path)
+        if _V2_AVAILABLE:
+            # Use v2 preview for accurate per-ref scoring
+            try:
+                data = preview_v2(full_text)
+                refs_data = data.get('refs', [])
+                cited_count = sum(1 for r in refs_data if r.get('cited'))
+                total_conf  = sum(r.get('confidence', 0) for r in refs_data)
+                avg = round(total_conf / len(refs_data), 1) if refs_data else 0
+                items = []
+                for r in refs_data:
+                    conf = r.get('confidence', 0)
+                    cited = r.get('cited', False)
+                    tier = 'high' if conf >= 85 else ('medium' if conf >= 60 else ('low' if cited else 'none'))
+                    items.append({
+                        'index':      r['index'],
+                        'author':     r['authors'][0] if r.get('authors') else 'Unknown',
+                        'year':       r.get('year', ''),
+                        'confidence': conf,
+                        'status':     '✓ cited' if cited else '✗ not found',
+                        'tier':       tier,
+                    })
+                return {
+                    'total':          len(refs_data),
+                    'cited':          cited_count,
+                    'avg_confidence': avg,
+                    'items':          items,
+                }
+            except Exception:
+                pass  # fall through to v1
 
+        # v1 fallback
         body, ref_section = split_references_from_body(full_text)
         refs = parse_references(ref_section)
         if not refs:
@@ -469,11 +577,7 @@ def _compute_confidence(input_path: str, ext: str, style: str,
 
         for ref in refs:
             hits = find_citation_positions(body, [ref])
-            # If strict_only, only count hits where is_strict=True
-            if strict_only:
-                hits = [h for h in hits]   # placeholder — filter in matcher
-
-            conf = _score_confidence(hits)
+            conf  = _score_confidence(hits)
             cited = len(hits) > 0
             if cited:
                 cited_count += 1
@@ -500,24 +604,38 @@ def _compute_confidence(input_path: str, ext: str, style: str,
         return {'total': 0, 'cited': 0, 'avg_confidence': 0, 'items': []}
 
 
+def _compute_confidence(input_path: str, ext: str, style: str,
+                        strict_only: bool = False) -> dict:
+    """Legacy: re-read file then call _compute_confidence_from_text."""
+    try:
+        if ext == '.docx':
+            full_text, _ = read_docx(input_path)
+        elif ext == '.pdf':
+            if not _PDF_SUPPORTED:
+                return {'total': 0, 'cited': 0, 'avg_confidence': 0, 'items': []}
+            from file_handlers import read_pdf as _rpdf2
+            full_text = _rpdf2(input_path)
+        else:
+            full_text = read_text(input_path)
+        return _compute_confidence_from_text(full_text, style, strict_only)
+    except Exception:
+        return {'total': 0, 'cited': 0, 'avg_confidence': 0, 'items': []}
+
+
 def _score_confidence(hits: list) -> int:
     """
     Score a list of match hits → confidence percentage.
-    Based on match type priority:
-      - Patterns 1-3 (strict) → 90-97%
-      - Pattern 4-5 (et al. / two-author no year) → 75-85%
-      - Pattern 6 (surname only) → 55%
-      - No hits → 0%
+      >= 3 hits → 95%  (very well cited)
+      2 hits    → 85%
+      1 hit     → 75%
+      0 hits    → 0%   (not found in text)
     """
     if not hits:
         return 0
-    # Return highest confidence found
-    # hits are (start, end, placeholder, ref_idx) — we don't have pattern info here
-    # so use count as proxy: more hits = higher confidence
     n = len(hits)
-    if n >= 3:  return 95
-    if n == 2:  return 85
-    return 75   # single hit
+    if n >= 3: return 95
+    if n == 2: return 85
+    return 75
 
 
 def _build_result_context(entry: dict, result_id: str) -> dict:
@@ -582,6 +700,19 @@ def _build_result_context(entry: dict, result_id: str) -> dict:
 
 # ── Batch processing ──────────────────────────────────────────────────────────
 
+
+
+# ── Engine status ─────────────────────────────────────────────────────────────
+
+@app.route('/api/engine/status')
+def api_engine_status():
+    """Return which processing engine is active."""
+    return jsonify({
+        'v2':  _V2_AVAILABLE,
+        'v1':  True,
+        'active': 'v2' if _V2_AVAILABLE else 'v1',
+        'styles_v2': SUPPORTED_STYLES_V2,
+    })
 
 # -- AI Endpoints -------------------------------------------------------------
 

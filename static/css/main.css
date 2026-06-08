@@ -974,6 +974,46 @@ footer {
 .form-label { font-size:.85rem;font-weight:600;color:var(--text-sub); }
 .doi-or { text-align:center;color:var(--text-muted);font-size:.82rem;padding:.25rem 0; }
 
+/* AI language detector */
+.ai-language-container { max-width:920px;margin:0 auto;padding:2rem 1rem 4rem; }
+.ai-lang-grid { display:grid;grid-template-columns:1fr 1.2fr;gap:1rem;align-items:stretch; }
+.ai-lang-drop { height:100%;min-height:220px;display:flex;flex-direction:column;justify-content:center; }
+.ai-lang-result { margin-top:1rem;display:flex;flex-direction:column;gap:1rem; }
+.ai-lang-score-card {
+  display:flex;align-items:center;gap:1.25rem;padding:1rem 1.2rem;
+  background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);
+}
+.ai-lang-score { min-width:128px;text-align:center;border-right:1px solid var(--border);padding-right:1.1rem; }
+.ai-lang-score strong { display:block;font-size:2.2rem;line-height:1;color:var(--accent); }
+.ai-lang-score span { display:block;font-size:.74rem;color:var(--text-muted);margin-top:.3rem;text-transform:uppercase;letter-spacing:.04em; }
+.ai-lang-score-card.ai-lang-high .ai-lang-score strong { color:var(--red); }
+.ai-lang-score-card.ai-lang-medium .ai-lang-score strong { color:var(--amber); }
+.ai-lang-score-card.ai-lang-low .ai-lang-score strong { color:var(--green); }
+.ai-lang-summary { color:var(--text);font-size:.9rem; }
+.ai-lang-summary small { display:block;color:var(--text-muted);margin-top:.25rem; }
+.ai-lang-locations { display:flex;flex-direction:column;gap:.65rem; }
+.ai-lang-location {
+  background:var(--surface2);border:1px solid var(--border);
+  border-left:4px solid var(--green);border-radius:var(--radius-sm);
+  padding:.85rem 1rem;
+}
+.ai-lang-location.ai-lang-high { border-left-color:var(--red); }
+.ai-lang-location.ai-lang-medium { border-left-color:var(--amber); }
+.ai-lang-location-head { display:flex;align-items:center;gap:.65rem;margin-bottom:.45rem; }
+.ai-lang-location-head strong { font-size:.95rem;color:var(--accent); }
+.ai-lang-location-head span { color:var(--text-muted);font-size:.78rem; }
+.ai-lang-location p { color:var(--text);font-size:.86rem;line-height:1.55;margin-bottom:.55rem; }
+.ai-lang-reasons { display:flex;flex-wrap:wrap;gap:.35rem; }
+.ai-lang-reason {
+  background:var(--surface3);border:1px solid var(--border);
+  border-radius:100px;padding:.12rem .5rem;font-size:.7rem;color:var(--text-sub);
+}
+@media (max-width: 760px) {
+  .ai-lang-grid { grid-template-columns:1fr; }
+  .ai-lang-score-card { align-items:flex-start; }
+  .ai-lang-score { min-width:96px; }
+}
+
 /* ── Keyboard shortcuts ───────────────────────────────────────── */
 .shortcuts-list { display:flex;flex-direction:column;gap:.5rem; }
 .shortcut-row { display:flex;align-items:center;gap:.75rem;font-size:.82rem;color:var(--text-sub); }

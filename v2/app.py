@@ -243,8 +243,5 @@ def process():
         return redirect(url_for('index'))
 
 
-if __name__ == '__main__':
-    print("=" * 50)
-    print("  Auto-Citer v2  |  http://localhost:5000")
-    print("=" * 50)
-    app.run(debug=False, port=5000)
+
+# ─── Plagiarism checker HTML ────────────────────────────────────────�

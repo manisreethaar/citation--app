@@ -35,6 +35,7 @@
     <button class="tab-btn active" data-tab="single" id="tab-single">📄 Single Document</button>
     <button class="tab-btn" data-tab="batch" id="tab-batch">📦 Batch Processing</button>
     <button class="tab-btn" data-tab="doi" id="tab-doi">🔗 DOI Lookup</button>
+    <button class="tab-btn" data-tab="ai-language" id="tab-ai-language">🧭 AI Language Check</button>
     {% if ai_available %}
     <button class="tab-btn" data-tab="ai" id="tab-ai">🤖 AI Assistant <span class="tab-ai-badge">NEW</span></button>
     {% endif %}
@@ -369,6 +370,43 @@
 </div>
 </div><!-- end doi tab -->
 
+<!-- ═══════════════ AI LANGUAGE TAB ═══════════════ -->
+<div class="tab-content" id="tab-content-ai-language">
+<div class="ai-language-container">
+  <div class="card">
+    <div class="card-header">
+      <span class="step-badge">%</span>
+      <h2>AI Language Detector</h2>
+    </div>
+    <p class="info-text" style="margin-bottom:1rem">Upload a document or paste text to estimate AI-like language and find the exact sentences that need review.</p>
+
+    <div class="ai-lang-grid">
+      <div>
+        <label class="form-label">Upload document</label>
+        <div class="drop-zone ai-lang-drop" id="ai-lang-drop-zone">
+          <div class="dz-icon">📄</div>
+          <p class="dz-main">Drop .docx, .pdf, or .txt here, or <span class="browse-link">browse</span></p>
+          <div id="ai-lang-file-info" class="file-info"></div>
+        </div>
+        <input type="file" id="ai-lang-file-input" accept=".docx,.pdf,.txt" style="display:none">
+      </div>
+      <div>
+        <label class="form-label">Or paste text</label>
+        <textarea class="text-area" id="ai-lang-text" rows="10"
+                  placeholder="Paste a paragraph, section, or full document here..."></textarea>
+      </div>
+    </div>
+
+    <button type="button" class="btn-submit" id="btn-ai-lang-detect" style="margin-top:1rem">
+      <span class="btn-icon">🔎</span>
+      <span class="btn-text">Check AI Language</span>
+    </button>
+
+    <div id="ai-lang-result" class="ai-lang-result" style="display:none"></div>
+  </div>
+</div>
+</div><!-- end ai language tab -->
+
 
 <!-- ═══════════════ AI TAB ═══════════════ -->
 {% if ai_available %}
@@ -482,6 +520,7 @@ window.AUTOCITER = {
   aiSuggestUrl:"{{ url_for('api_ai_suggest') }}",
   aiCompleteUrl:"{{ url_for('api_ai_complete') }}",
   aiDetectUrl: "{{ url_for('api_ai_detect_style') }}",
+  aiLanguageUrl: "{{ url_for('api_ai_language_detect') }}",
   aiAvailable: {{ 'true' if ai_available else 'false' }},
 };
 </script>

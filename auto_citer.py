@@ -112,35 +112,56 @@ def process_document(input_path: str, style: str = 'apa',
     if not full_text or not full_text.strip():
         raise RuntimeError("The document appears to be empty or could not be read.")
 
-    # ── 2. Split body + references ───────────────────────────────────────────
-    body, ref_section = split_references_from_body(full_text)
-
-    if not ref_section.strip():
-        raise RuntimeError(
-            "No reference section found. "
-            "Ensure your document ends with a 'References' (or 'Bibliography') heading."
-        )
-
-    # ── 3. Detect existing citation mode ─────────────────────────────
-    detection = detect_citation_mode(body)
-    print(f"[auto-citer] Citation mode: {detection['mode']} ({detection['count']} markers)")
-
-    # ── 4. Parse references ─────────────────────────────────────────
-    refs = parse_references(ref_section)
-    print(f"[auto-citer] Found {len(refs)} references.")
-
-    if not refs:
-        raise RuntimeError(
-            "Could not parse any references from the reference section. "
-            "Check that references are properly formatted."
-        )
-
-    # ── 5. Insert / reformat citations ──────────────────────────────
-    cited_body, mode_desc = smart_insert_citations(body, refs, style)
-    print(f"[auto-citer] {mode_desc}")
-
-    # ── 6. Format bibliography ──────────────────────────────────────
-    new_bibliography = format_bibliography(refs, style)
+    # ── Try v2 Engine first ──────────────────────────────────────────────────
+    import sys as _sys
+    _v2_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'v2')
+    if _v2_dir not in _sys.path:
+        _sys.path.insert(0, _v2_dir)
+    
+    _v2_used = False
+    try:
+        from v2.bridge import process_v2
+        v2_result = process_v2(full_text, style)
+        cited_body = v2_result.cited_body
+        new_bibliography = v2_result.bibliography
+        refs = v2_result.refs
+        body = cited_body  # just for report
+        mode_desc = f"v2 engine: {v2_result.num_inserted} citations inserted"
+        print(f"[auto-citer] {mode_desc}")
+        _v2_used = True
+    except Exception as e:
+        print(f"[auto-citer] v2 failed ({e}), falling back to v1")
+        
+    if not _v2_used:
+        # ── 2. Split body + references (v1) ──────────────────────────────────────
+        body, ref_section = split_references_from_body(full_text)
+    
+        if not ref_section.strip():
+            raise RuntimeError(
+                "No reference section found. "
+                "Ensure your document ends with a 'References' (or 'Bibliography') heading."
+            )
+    
+        # ── 3. Detect existing citation mode ─────────────────────────────
+        detection = detect_citation_mode(body)
+        print(f"[auto-citer] Citation mode: {detection['mode']} ({detection['count']} markers)")
+    
+        # ── 4. Parse references ─────────────────────────────────────────
+        refs = parse_references(ref_section)
+        print(f"[auto-citer] Found {len(refs)} references.")
+    
+        if not refs:
+            raise RuntimeError(
+                "Could not parse any references from the reference section. "
+                "Check that references are properly formatted."
+            )
+    
+        # ── 5. Insert / reformat citations ──────────────────────────────
+        cited_body, mode_desc = smart_insert_citations(body, refs, style)
+        print(f"[auto-citer] {mode_desc}")
+    
+        # ── 6. Format bibliography ──────────────────────────────────────
+        new_bibliography = format_bibliography(refs, style)
 
     # ── 7. Write output ─────────────────────────────────────────────
     if ext == '.docx' and doc_obj is not None:

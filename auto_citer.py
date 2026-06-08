@@ -7,10 +7,10 @@ Usage (command line):
   python auto_citer.py --input paper.pdf  --style vancouver --output cited_paper.pdf
   python auto_citer.py --input paper.docx --style ieee --report
 
-Supported styles: apa | vancouver | ieee | nature
+Supported styles: apa | vancouver | ieee | nature | mla | chicago
 
 Options:
-  --input    Path to the input document (.docx or .pdf)
+  --input    Path to the input document (.docx, .pdf, or .txt)
   --style    Citation style (default: apa)
   --output   Output file path (default: <input>_cited.<ext>)
   --report   Print a match report showing which references were found in text
@@ -37,7 +37,10 @@ _REF_SECTION_RE = re.compile(
     re.IGNORECASE
 )
 
-SUPPORTED_STYLES = ['apa', 'vancouver', 'ieee', 'nature']
+SUPPORTED_STYLES = ['apa', 'vancouver', 'ieee', 'nature', 'mla', 'chicago']
+
+# Maximum file size (16 MB)
+MAX_FILE_SIZE = 16 * 1024 * 1024
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,14 +50,47 @@ SUPPORTED_STYLES = ['apa', 'vancouver', 'ieee', 'nature']
 def process_document(input_path: str, style: str = 'apa',
                      output_path: str = None, print_report: bool = False) -> str:
     """
-    Main pipeline.
-    Returns the output file path.
+    Main processing pipeline.
+
+    Args:
+        input_path:   Path to .docx, .pdf, or .txt file.
+        style:        Citation style (apa, vancouver, ieee, nature, mla, chicago).
+        output_path:  Where to save the output (default: <input>_cited.<ext>).
+        print_report: If True, print a citation match report to stdout.
+
+    Returns:
+        The output file path.
+
+    Raises:
+        ValueError: For invalid style or unsupported file type.
+        RuntimeError: If no reference section or no references found.
+        FileNotFoundError: If input file does not exist.
+        OSError: If file exceeds size limit.
     """
     style = style.lower()
     if style not in SUPPORTED_STYLES:
-        raise ValueError(f"Style '{style}' not supported. Choose from: {SUPPORTED_STYLES}")
+        raise ValueError(
+            f"Style '{style}' not supported. Choose from: {', '.join(SUPPORTED_STYLES)}"
+        )
+
+    input_path = str(input_path)
+    if not os.path.isfile(input_path):
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+
+    file_size = os.path.getsize(input_path)
+    if file_size > MAX_FILE_SIZE:
+        raise OSError(
+            f"File too large ({file_size / 1024 / 1024:.1f} MB). "
+            f"Maximum allowed: {MAX_FILE_SIZE // 1024 // 1024} MB."
+        )
 
     ext = Path(input_path).suffix.lower()
+    supported_exts = {'.docx', '.pdf', '.txt'}
+    if ext not in supported_exts:
+        raise ValueError(
+            f"Unsupported file type '{ext}'. Supported: {', '.join(supported_exts)}"
+        )
+
     if output_path is None:
         stem = Path(input_path).stem
         output_path = str(Path(input_path).parent / f"{stem}_cited{ext}")
@@ -72,21 +108,27 @@ def process_document(input_path: str, style: str = 'apa',
         full_text = read_text(input_path)
         doc_obj = None
 
+    if not full_text or not full_text.strip():
+        raise RuntimeError("The document appears to be empty or could not be read.")
+
     # ── 2. Split body + references ───────────────────────────────────────────
     body, ref_section = split_references_from_body(full_text)
 
     if not ref_section.strip():
-        print("[auto-citer] WARNING: No reference section found.")
-        print("             Ensure your document ends with a 'References' heading.")
-        sys.exit(1)
+        raise RuntimeError(
+            "No reference section found. "
+            "Ensure your document ends with a 'References' (or 'Bibliography') heading."
+        )
 
     # ── 3. Parse references ──────────────────────────────────────────────────
     refs = parse_references(ref_section)
     print(f"[auto-citer] Found {len(refs)} references.")
 
     if not refs:
-        print("[auto-citer] ERROR: Could not parse any references.")
-        sys.exit(1)
+        raise RuntimeError(
+            "Could not parse any references from the reference section. "
+            "Check that references are properly formatted."
+        )
 
     # ── 4. Insert citations into body ────────────────────────────────────────
     cited_body = insert_citations(body, refs, style)
@@ -96,7 +138,6 @@ def process_document(input_path: str, style: str = 'apa',
 
     # ── 6. Write output ──────────────────────────────────────────────────────
     if ext == '.docx' and doc_obj is not None:
-        # Find where references start in the paragraph list
         ref_para_idx = find_refs_start_paragraph(doc_obj, _REF_SECTION_RE)
         write_docx(doc_obj, cited_body, new_bibliography, ref_para_idx, output_path)
     elif ext == '.pdf':
@@ -129,7 +170,6 @@ def _print_report(original_body: str, cited_body: str,
         if cite in cited_body or f'__CITE_{ref.index}__' in cited_body:
             status = '✓ CITED'
         else:
-            # Check if surname appears anywhere
             surname = ref.first_author_surname or ''
             if surname and surname.lower() in original_body.lower():
                 status = '? SURNAME FOUND (year mismatch?)'
@@ -138,6 +178,28 @@ def _print_report(original_body: str, cited_body: str,
         label = (ref.authors[0] if ref.authors else 'Unknown') + f' ({ref.year or "?"})'
         print(f'  [{ref.index:3d}] {status:40s} {label}')
     print('=' * 60 + '\n')
+
+
+def build_report(body: str, cited_body: str, refs, style: str) -> str:
+    """Return match report as a string (for web UI display)."""
+    lines = ['Citation Match Report', '=' * 50]
+    cited_count = 0
+    for ref in refs:
+        cite = inline_citation(ref, style)
+        if cite in cited_body:
+            status = '✓ cited'
+            cited_count += 1
+        else:
+            surname = ref.first_author_surname or ''
+            if surname and surname.lower() in body.lower():
+                status = '? surname found'
+            else:
+                status = '✗ not found'
+        label = (ref.authors[0] if ref.authors else 'Unknown') + f' ({ref.year or "?"})'
+        lines.append(f'[{ref.index:3d}] {status:18s} {label}')
+    lines.append('=' * 50)
+    lines.append(f'Total: {cited_count}/{len(refs)} references cited.')
+    return '\n'.join(lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -161,7 +223,11 @@ def main():
                         help='Print a citation match report after processing')
 
     args = parser.parse_args()
-    process_document(args.input, args.style, args.output, args.report)
+    try:
+        process_document(args.input, args.style, args.output, args.report)
+    except (ValueError, RuntimeError, FileNotFoundError, OSError) as e:
+        print(f"[auto-citer] ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':

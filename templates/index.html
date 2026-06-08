@@ -36,6 +36,7 @@
     <button class="tab-btn" data-tab="batch" id="tab-batch">📦 Batch Processing</button>
     <button class="tab-btn" data-tab="doi" id="tab-doi">🔗 DOI Lookup</button>
     <button class="tab-btn" data-tab="ai-language" id="tab-ai-language">🧭 AI Language Check</button>
+    <button class="tab-btn" data-tab="plagiarism" id="tab-plagiarism">🔍 Plagiarism Check</button>
     {% if ai_available %}
     <button class="tab-btn" data-tab="ai" id="tab-ai">🤖 AI Assistant <span class="tab-ai-badge">NEW</span></button>
     {% endif %}
@@ -487,6 +488,110 @@
 </div>
 </div>
 {% endif %}<!-- end ai tab -->
+
+
+<!-- ═══════════════ PLAGIARISM TAB ═══════════════ -->
+<div class="tab-content" id="tab-content-plagiarism">
+<div class="page-grid" style="grid-template-columns:1fr">
+
+  <div class="form-col" style="max-width:720px;margin:0 auto;width:100%">
+
+    <div class="card">
+      <div class="card-header">
+        <span class="step-badge">🔍</span>
+        <h2>Plagiarism Checker</h2>
+      </div>
+      <p class="info-text" style="margin-bottom:1.25rem">
+        Upload a document to check for similarity against source files and the web.
+        Detects exact matches, near-duplicates, and shared rare phrases.
+      </p>
+
+      <form method="POST" action="{{ url_for('run_plagiarism_check') }}"
+            enctype="multipart/form-data" id="plag-form">
+
+        <!-- Document to check -->
+        <label class="form-label">Document to check</label>
+        <div class="drop-zone" id="plag-dz" onclick="document.getElementById('plag-fi').click()"
+             style="margin-bottom:1rem">
+          <div class="dz-icon">📄</div>
+          <p class="dz-main">Drag & drop or <span class="browse-link">browse</span></p>
+          <div class="dz-tags">
+            <span class="dz-tag">.docx</span>
+            <span class="dz-tag">.pdf</span>
+            <span class="dz-tag">.txt</span>
+          </div>
+          <div id="plag-fi-name" style="margin-top:.5rem;font-size:.85rem;color:#4a5568"></div>
+        </div>
+        <input type="file" id="plag-fi" name="document" accept=".docx,.pdf,.txt" style="display:none">
+
+        <!-- Source files -->
+        <label class="form-label" style="margin-top:1rem">
+          Source files to compare against
+          <span style="font-weight:400;color:#a0aec0">(optional — upload reference papers)</span>
+        </label>
+        <div class="drop-zone" id="plag-src-dz" onclick="document.getElementById('plag-si').click()"
+             style="padding:1.2rem;margin-bottom:1rem">
+          <p class="dz-main" style="font-size:.9rem">Add source documents · Multiple files OK</p>
+          <div id="plag-si-name" style="margin-top:.4rem;font-size:.82rem;color:#4a5568"></div>
+        </div>
+        <input type="file" id="plag-si" name="sources" accept=".docx,.pdf,.txt" multiple style="display:none">
+
+        <!-- Web search toggle -->
+        <div class="card" style="background:#f7fafc;box-shadow:none;border:1px solid #e2e8f0;padding:1rem;margin-top:.5rem">
+          <label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;font-size:.9rem;font-weight:500">
+            <input type="checkbox" name="web_check" value="1" id="plag-wb"
+                   {% if plag_api_key %}checked{% endif %}
+                   style="width:16px;height:16px;accent-color:#4299e1">
+            Enable web search (checks phrases against the internet)
+          </label>
+          <div id="plag-api-fields" style="margin-top:.75rem;padding-left:1.5rem;
+               {% if not plag_api_key %}display:none{% endif %}">
+            <label class="form-label">Google API Key</label>
+            <input type="text" class="text-input" name="google_api_key"
+                   value="{{ plag_api_key }}" placeholder="AIzaSy..."
+                   style="margin-bottom:.5rem">
+            <label class="form-label">Custom Search Engine ID</label>
+            <input type="text" class="text-input" name="google_cse_id"
+                   value="{{ plag_cse_id }}" placeholder="203a1a...">
+            <p style="font-size:.78rem;color:#718096;margin-top:.4rem">
+              Free · 100 searches/day ·
+              <a href="https://programmablesearchengine.google.com/" target="_blank"
+                 style="color:#4299e1">Get keys</a>
+            </p>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-submit" style="margin-top:1.25rem" id="plag-btn">
+          <span class="btn-icon">🔍</span>
+          <span class="btn-text">Run Plagiarism Check</span>
+        </button>
+
+        <div id="plag-spinner" style="display:none;text-align:center;padding:1rem;color:#718096;font-size:.9rem">
+          Checking… this may take a minute.
+        </div>
+
+      </form>
+    </div>
+
+    <!-- How it works -->
+    <div class="card" style="background:#fffbeb;border:1px solid #fbd38d;box-shadow:none">
+      <h2 style="font-size:.95rem;margin-bottom:.75rem">How it detects plagiarism</h2>
+      <div style="font-size:.88rem;color:#744210;line-height:1.7">
+        <strong>Layer 1 — Exact/near-exact match:</strong> Splits text into 60-word chunks,
+        creates n-gram fingerprints, compares with Jaccard similarity.<br>
+        <strong>Layer 2 — Keyword overlap:</strong> TF-IDF cosine similarity catches
+        paraphrased text with shared vocabulary.<br>
+        <strong>Layer 3 — Rare phrases:</strong> Flags 6+ word sequences that can't appear
+        by coincidence.<br>
+        <strong>Layer 4 — Web search:</strong> Sends distinctive phrases to Google Custom Search
+        and compares fetched pages.
+      </div>
+    </div>
+
+  </div>
+</div>
+</div><!-- end plagiarism tab -->
+
 
 <!-- Reference preview modal -->
 <div id="preview-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" style="display:none">

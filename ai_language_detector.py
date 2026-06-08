@@ -146,9 +146,15 @@ def detect_ai_language(text: str) -> Dict:
     flagged = [f for f in features if f.score >= 0.48]
     ai_like_words = round(sum(f.score * f.word_count for f in features))
 
+    ranked_features = sorted(features, key=lambda item: item.score, reverse=True)
+    location_features = [
+        f for f in ranked_features
+        if f.score >= 0.22 or f.reasons
+    ][:100]
+
     locations = [
         {
-            'sentence_index': i + 1,
+            'sentence_index': features.index(f) + 1,
             'line': f.line,
             'paragraph': f.paragraph,
             'start': f.start,
@@ -158,18 +164,19 @@ def detect_ai_language(text: str) -> Dict:
             'tier': f.tier,
             'text': f.text,
             'reasons': f.reasons[:6],
+            'dominant_signals': _dominant_signals(f),
+            'recommendation': _recommendation(f),
             'evidence': {
                 'predictability': round(f.predictability * 100),
                 'rhythm_uniformity': round(f.rhythm_uniformity * 100),
                 'redundancy': round(f.redundancy * 100),
                 'low_specificity': round(f.low_specificity * 100),
                 'style_contrast': round(f.style_contrast * 100),
+                'genericity': round(f.genericity * 100),
             },
         }
-        for i, f in enumerate(features)
-        if f.score >= 0.34
+        for f in location_features
     ]
-    locations.sort(key=lambda item: item['percent'], reverse=True)
 
     return {
         'overall_percent': round(weighted_score * 100),
@@ -178,6 +185,7 @@ def detect_ai_language(text: str) -> Dict:
         'sentence_count': len(features),
         'flagged_count': len(flagged),
         'signals': signal_summary,
+        'signal_notes': _signal_notes(signal_summary),
         'paragraphs': paragraph_reports,
         'locations': locations[:100],
         'summary': _summary(weighted_score, len(flagged), len(features)),
@@ -408,12 +416,36 @@ def _paragraph_reports(features: List[SentenceFeatures]) -> List[Dict]:
         if words < 15:
             continue
         score = sum(f.score * f.word_count for f in group) / words
+        top = sorted(group, key=lambda item: item.score, reverse=True)[:3]
+        signal_totals = {
+            'predictability': mean([f.predictability for f in group]),
+            'rhythm_uniformity': mean([f.rhythm_uniformity for f in group]),
+            'redundancy': mean([f.redundancy for f in group]),
+            'low_specificity': mean([f.low_specificity for f in group]),
+            'style_contrast': mean([f.style_contrast for f in group]),
+            'genericity': mean([f.genericity for f in group]),
+        }
+        dominant = [
+            {'name': name, 'percent': round(value * 100)}
+            for name, value in sorted(signal_totals.items(), key=lambda item: item[1], reverse=True)[:3]
+            if value >= 0.12
+        ]
         reports.append({
             'paragraph': para,
             'percent': round(score * 100),
             'word_count': words,
             'flagged_sentences': sum(1 for f in group if f.score >= 0.48),
             'tier': 'high' if score >= 0.65 else ('medium' if score >= 0.40 else 'low'),
+            'dominant_signals': dominant,
+            'top_locations': [
+                {
+                    'line': f.line,
+                    'percent': f.percent,
+                    'text': _excerpt(f.text, 170),
+                }
+                for f in top
+                if f.score >= 0.18 or f.reasons
+            ],
         })
     reports.sort(key=lambda r: r['percent'], reverse=True)
     return reports[:30]
@@ -433,6 +465,61 @@ def _signal_summary(features: List[SentenceFeatures]) -> Dict[str, int]:
         'style_contrast': weighted('style_contrast'),
         'genericity': weighted('genericity'),
     }
+
+
+def _signal_notes(signals: Dict[str, int]) -> List[Dict]:
+    descriptions = {
+        'predictability': 'Text uses common, statistically safe wording.',
+        'rhythm_uniformity': 'Sentence lengths and rhythm are unusually even.',
+        'redundancy': 'Ideas or phrases repeat across the document.',
+        'low_specificity': 'Passages lack concrete names, numbers, citations, or details.',
+        'style_contrast': 'Some passages differ from the document baseline style.',
+        'genericity': 'Academic-sounding but broad vocabulary appears frequently.',
+    }
+    return [
+        {
+            'name': name,
+            'percent': value,
+            'description': descriptions.get(name, ''),
+            'severity': 'high' if value >= 65 else ('medium' if value >= 35 else 'low'),
+        }
+        for name, value in sorted(signals.items(), key=lambda item: item[1], reverse=True)
+    ]
+
+
+def _dominant_signals(f: SentenceFeatures) -> List[Dict]:
+    values = {
+        'predictability': f.predictability,
+        'rhythm uniformity': f.rhythm_uniformity,
+        'redundancy': f.redundancy,
+        'low specificity': f.low_specificity,
+        'style contrast': f.style_contrast,
+        'genericity': f.genericity,
+    }
+    return [
+        {'name': name, 'percent': round(value * 100)}
+        for name, value in sorted(values.items(), key=lambda item: item[1], reverse=True)[:3]
+        if value >= 0.15
+    ]
+
+
+def _recommendation(f: SentenceFeatures) -> str:
+    if f.low_specificity >= 0.55 and f.genericity >= 0.25:
+        return 'Add concrete evidence: source, data point, method name, or a specific example.'
+    if f.redundancy >= 0.45:
+        return 'Check whether this repeats an earlier idea; merge or replace with new evidence.'
+    if f.rhythm_uniformity >= 0.70 and f.predictability >= 0.35:
+        return 'Vary sentence structure and replace generic phrasing with author-specific wording.'
+    if f.style_contrast >= 0.35:
+        return 'Review whether this passage matches the surrounding author voice.'
+    if f.phrase_score >= 0.20:
+        return 'Replace template-like phrasing with a direct, specific claim.'
+    return 'Review for specificity and source grounding.'
+
+
+def _excerpt(text: str, limit: int) -> str:
+    collapsed = re.sub(r'\s+', ' ', text).strip()
+    return collapsed if len(collapsed) <= limit else collapsed[:limit - 1].rstrip() + '…'
 
 
 def _ngrams(words: List[str], n: int) -> List[str]:

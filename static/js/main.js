@@ -638,6 +638,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const tier = pct >= 65 ? 'high' : (pct >= 40 ? 'medium' : 'low');
     const locations = data.locations || [];
     const signals = data.signals || {};
+    const signalNotes = data.signal_notes || [];
     const paragraphs = data.paragraphs || [];
     aiLangResult.innerHTML = `
       <div class="ai-lang-score-card ai-lang-${tier}">
@@ -652,7 +653,9 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
       <div class="ai-lang-note">${escapeHtml(data.confidence_note || '')}</div>
       <div class="ai-lang-signals">
-        ${Object.entries(signals).map(([name, value]) => renderAiLanguageSignal(name, value)).join('')}
+        ${signalNotes.length
+          ? signalNotes.map(renderAiLanguageSignalNote).join('')
+          : Object.entries(signals).map(([name, value]) => renderAiLanguageSignal(name, value)).join('')}
       </div>
       ${paragraphs.length ? `
       <div class="ai-lang-paragraphs">
@@ -660,8 +663,8 @@ document.addEventListener('DOMContentLoaded', () => {
         ${paragraphs.slice(0, 8).map(renderAiLanguageParagraph).join('')}
       </div>` : ''}
       <div class="ai-lang-locations">
-        <div class="section-label">Flagged locations <span class="badge">${locations.length}</span></div>
-        ${locations.length ? locations.map(renderAiLanguageLocation).join('') : '<div class="fetch-empty">No strong AI-language locations found.</div>'}
+        <div class="section-label">Passage-level evidence <span class="badge">${locations.length}</span></div>
+        ${locations.length ? locations.map(renderAiLanguageLocation).join('') : '<div class="fetch-empty">No passage-level evidence above review threshold.</div>'}
       </div>`;
   }
 
@@ -674,17 +677,41 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>`;
   }
 
+  function renderAiLanguageSignalNote(item) {
+    return `
+      <div class="ai-lang-signal ai-lang-${item.severity || 'low'}">
+        <div class="ai-lang-signal-top"><span>${escapeHtml((item.name || '').replace(/_/g, ' '))}</span><strong>${item.percent}%</strong></div>
+        <div class="ai-lang-meter"><span style="width:${Math.max(0, Math.min(100, item.percent || 0))}%"></span></div>
+        <small>${escapeHtml(item.description || '')}</small>
+      </div>`;
+  }
+
   function renderAiLanguageParagraph(item) {
+    const signals = (item.dominant_signals || []).map(s =>
+      `<span class="ai-lang-reason">${escapeHtml((s.name || '').replace(/_/g, ' '))}: ${s.percent}%</span>`
+    ).join('');
+    const samples = (item.top_locations || []).map(s =>
+      `<li><strong>${s.percent}%</strong> line ${s.line}: ${escapeHtml(s.text)}</li>`
+    ).join('');
     return `
       <div class="ai-lang-para ai-lang-${item.tier || 'low'}">
-        <strong>${item.percent}%</strong>
-        <span>Paragraph ${item.paragraph}</span>
-        <small>${item.word_count} words, ${item.flagged_sentences} flagged sentence(s)</small>
+        <div class="ai-lang-para-main">
+          <strong>${item.percent}%</strong>
+          <span>Paragraph ${item.paragraph}</span>
+          <small>${item.word_count} words, ${item.flagged_sentences} strong flag(s)</small>
+        </div>
+        <div class="ai-lang-para-detail">
+          <div class="ai-lang-reasons">${signals}</div>
+          ${samples ? `<ul>${samples}</ul>` : ''}
+        </div>
       </div>`;
   }
 
   function renderAiLanguageLocation(item) {
     const reasons = (item.reasons || []).map(r => `<span class="ai-lang-reason">${escapeHtml(r)}</span>`).join('');
+    const dominant = (item.dominant_signals || []).map(s =>
+      `<span class="ai-lang-reason">${escapeHtml(s.name)}: ${s.percent}%</span>`
+    ).join('');
     const evidence = item.evidence || {};
     const evidenceHtml = Object.entries(evidence).map(([k, v]) =>
       `<span class="ai-lang-evidence">${escapeHtml(k.replace(/_/g, ' '))}: ${v}%</span>`
@@ -697,8 +724,43 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
         <p>${escapeHtml(item.text)}</p>
         <div class="ai-lang-evidence-row">${evidenceHtml}</div>
-        <div class="ai-lang-reasons">${reasons}</div>
+        <div class="ai-lang-reasons">${dominant}${reasons}</div>
+        ${item.recommendation ? `<div class="ai-lang-recommendation">${escapeHtml(item.recommendation)}</div>` : ''}
       </div>`;
+  }
+
+  // ── Plagiarism checker tab ────────────────────────────────────
+  const plagFi   = document.getElementById('plag-fi');
+  const plagFiNm = document.getElementById('plag-fi-name');
+  const plagSi   = document.getElementById('plag-si');
+  const plagSiNm = document.getElementById('plag-si-name');
+  const plagWb   = document.getElementById('plag-wb');
+  const plagApi  = document.getElementById('plag-api-fields');
+  const plagForm = document.getElementById('plag-form');
+  const plagBtn  = document.getElementById('plag-btn');
+  const plagSpin = document.getElementById('plag-spinner');
+
+  if (plagFi) {
+    plagFi.addEventListener('change', () => {
+      plagFiNm.textContent = plagFi.files[0] ? '📎 ' + plagFi.files[0].name : '';
+    });
+  }
+  if (plagSi) {
+    plagSi.addEventListener('change', () => {
+      const names = Array.from(plagSi.files).map(f => f.name).join(', ');
+      plagSiNm.textContent = names ? '📎 ' + names : '';
+    });
+  }
+  if (plagWb && plagApi) {
+    plagWb.addEventListener('change', () => {
+      plagApi.style.display = plagWb.checked ? 'block' : 'none';
+    });
+  }
+  if (plagForm) {
+    plagForm.addEventListener('submit', () => {
+      if (plagBtn)  plagBtn.disabled = true;
+      if (plagSpin) plagSpin.style.display = 'block';
+    });
   }
 
   // ── Utilities ─────────────────────────────────────────────────
